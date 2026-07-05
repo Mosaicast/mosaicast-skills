@@ -1,0 +1,8 @@
+This repository is licensed under the Apache License 2.0 (SPDX: Apache-2.0).
+
+>>> Replace this file with the FULL license text before the first public commit. <<<
+Via GitHub: "Add file" -> "Create new file" -> name it LICENSE -> "Choose a license template".
+Or fetch the official text: https://www.apache.org/licenses/LICENSE-2.0.txt
+
+SPDX-License-Identifier: Apache-2.0
+Copyright (c) 2026 The Mosaicast Authors
