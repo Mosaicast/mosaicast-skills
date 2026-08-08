@@ -10,7 +10,7 @@
       "name": "mosaicast-plugin-dev",
       "source": "./plugins/mosaicast-plugin-dev",
       "description": "House skill for building Mosaicast plugins: manifest, slots, ctx, doc/schema storage, test kit, build.sh, SPDX.",
-      "version": "0.1.2",
+      "version": "0.1.3",
       "category": "development",
       "tags": ["mosaicast", "plugin", "sdk"]
     }
