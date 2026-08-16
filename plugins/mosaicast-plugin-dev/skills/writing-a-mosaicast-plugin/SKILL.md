@@ -51,6 +51,28 @@ To re-check the pin yourself:
 6. **Every `onChange` returns an `Unsubscribe`** — return it from your render's cleanup, or a detached shadow
    root keeps receiving callbacks.
 
+## Before you build: ask for a browser and an instance
+
+Do this **once, at the start** of plugin work. Both are recommended, **neither is a blocker** — if the user
+has neither, build the plugin in full anyway and say at the end what could not be verified.
+
+1. **Check whether you have browser tooling** (Playwright MCP or equivalent). If not, tell the user once
+   that you can still build and unit-test but cannot see the tile render, catch a CSP refusal or check a
+   phone width — and that enabling a browser tool would fix that. Then carry on; do not ask again.
+2. **Ask for a Mosaicast instance** you may install into and **restart** (a restart is how core picks up a
+   rebuilt plugin), and **ask whether it holds production or test data**. If the user has a `mosaicast-core`
+   checkout, `dev/screenshots.sh up` stands up a disposable seeded stack — best option, nothing real at risk.
+
+Then the data rule, which is absolute:
+
+- **Production data → never insert, update or delete anything.** Read, render, screenshot. If a path can
+  only be exercised by writing, say so and ask for a test instance instead of working around it.
+- **Test or dummy data → you may seed, but ask first**, naming the scope and keys you intend to write.
+
+**With both a browser and an instance, test across viewports and both themes while you develop** — 375×667,
+667×375, 768×1024, 1280×800, 1920×1080, light and dark. Your tile renders in regions of wildly different
+widths and you do not control any of them. Details, the full loop and what to look for: `references/dev-environment.md`.
+
 ## A plugin is one folder that builds to `dist/`
 
 Backend JAR (PF4J extension) + frontend Web Component bundle + `plugin.json`. No forced internal layout —
@@ -71,6 +93,7 @@ Three distinct URL namespaces, don't conflate them:
 | Java backend: `PluginContext`, `DocStore`, `SchemaStore`, aggregates, scheduling, extension points | `references/backend.md` |
 | Web Component: `ctx` surface, what the host actually implements, doc-store HTTP calls, CSP, theme, i18n | `references/frontend.md` |
 | Tests (required by the BRIEF's DoD) | `references/testing.md` |
+| Browser + live-instance setup, viewport matrix, data-safety rules, the build→install→restart loop | `references/dev-environment.md` |
 | Moving an existing plugin from 0.5.0 to 0.6.0 | `references/migrating.md` |
 
 Live reference implementation: **`mosaicast-plugin-sample` v2.7.0** (on SDK 0.6.0). Its `README.md` carries

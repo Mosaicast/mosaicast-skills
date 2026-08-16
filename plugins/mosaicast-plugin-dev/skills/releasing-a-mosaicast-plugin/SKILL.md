@@ -95,6 +95,9 @@ The folder name **must equal the manifest `id`**. Then verify in this order — 
    slot; otherwise a real 404.
 5. **Config**: values appear in the generated admin form; a field the caller may not edit is redacted from
    the read-back too.
+6. **Narrow widths and dark theme**: check the tile at a phone width (375px) and in both themes before
+   calling it released — regions like `card`, `player` and `top` are much tighter than a laptop makes them
+   look. If you have no browser access, say so in the release notes rather than implying it was checked.
 
 ## Load-failure modes, ranked by how often they happen
 
