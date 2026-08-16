@@ -1,0 +1,44 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 The Mosaicast Authors
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+jobs:
+  metadata:
+    name: Marketplace metadata
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      # The plugin version lives in two files and nothing else enforces that they agree; a bumped
+      # marketplace entry with a stale plugin.json ships a version consumers can never resolve.
+      - name: Plugin version parity
+        run: |
+          set -euo pipefail
+          plugin=$(jq -r '.version' plugins/mosaicast-plugin-dev/.claude-plugin/plugin.json)
+          market=$(jq -r '.plugins[] | select(.name == "mosaicast-plugin-dev") | .version' .claude-plugin/marketplace.json)
+          [ "$plugin" = "$market" ] || {
+            echo "::error::plugin.json version=$plugin but marketplace.json says $market"
+            exit 1
+          }
+          echo "mosaicast-plugin-dev $plugin ✅"
+
+      # A skill without frontmatter `name` + `description` is never model-invoked — it just silently
+      # never triggers, which is indistinguishable from the skill being wrong.
+      - name: Every skill has frontmatter
+        run: |
+          set -euo pipefail
+          fail=0
+          for f in plugins/*/skills/*/SKILL.md; do
+            head -n 1 "$f" | grep -qx -- '---' || { echo "::error file=$f::no frontmatter block"; fail=1; continue; }
+            awk 'NR>1 && /^---$/{exit} NR>1' "$f" | grep -q '^name:'        || { echo "::error file=$f::frontmatter has no name"; fail=1; }
+            awk 'NR>1 && /^---$/{exit} NR>1' "$f" | grep -q '^description:' || { echo "::error file=$f::frontmatter has no description"; fail=1; }
+            dir=$(basename "$(dirname "$f")")
+            declared=$(awk 'NR>1 && /^---$/{exit} NR>1' "$f" | sed -n 's/^name: *//p')
+            [ "$dir" = "$declared" ] || { echo "::error file=$f::name '$declared' does not match directory '$dir'"; fail=1; }
+          done
+          exit $fail

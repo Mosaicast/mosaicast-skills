@@ -1,6 +1,6 @@
 {
   "name": "mosaicast-plugin-dev",
-  "description": "House skill for building Mosaicast plugins (manifest, slots, ctx, stores, test kit, build.sh, SPDX).",
-  "version": "0.1.3",
+  "description": "House skills for Mosaicast plugin work: writing a plugin (manifest, slots, ctx, stores, test kit), scaffolding a new plugin repo, and cutting a release.",
+  "version": "0.2.0",
   "author": { "name": "The Mosaicast Authors" }
 }
