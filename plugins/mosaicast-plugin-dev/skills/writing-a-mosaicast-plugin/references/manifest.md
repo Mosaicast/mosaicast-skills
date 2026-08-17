@@ -12,8 +12,8 @@ rejected.
 ```json
 {
   "id": "sample",
-  "version": "2.7.0",
-  "platformApi": "0.6.0",
+  "version": "2.8.0",
+  "platformApi": "0.7.1",
   "name": "Sample",
   "backend":  { "basePath": "/api/plugins/sample", "extensions": ["dev.mosaicast.plugin.sample.SamplePlugin"] },
   "frontend": { "entry": "sample.es.js", "elements": ["sample-highlight", "sample-highlight-card"] },
@@ -33,8 +33,9 @@ rejected.
 ## `platformApi`
 
 Exact `major.minor` match against the host's `PlatformApi.VERSION`; patch is free. Pre-1.0 the *minor*
-carries breaking changes, so `0.5.0` against a 0.6.x host is rejected, and `"1.x"` fails to parse at all.
-`"0.6"`, `"0.6.0"` and `"0.6.4"` all pass against a 0.6.x host.
+carries breaking changes, so `0.6.0` against a 0.7.x host is rejected, and `"1.x"` fails to parse at all.
+`"0.7"`, `"0.7.0"` and `"0.7.1"` all pass against a 0.7.x host — but keep the string identical to the SDK
+version your code builds against, because the contract test and the CI drift guard compare them literally.
 
 ## `slots[]`
 
@@ -81,6 +82,10 @@ needs a signed-in user to belong to). Defaults when the block or a field is abse
 `podcaster`, and **`readableBy` = the write floor**, not anonymous — saying nothing gets the closed answer.
 So a plugin with an anonymous display slot and no `data` block **403s on reads**; if the data really is
 public, say `"readableBy": "anonymous"` explicitly.
+
+`readableBy` also governs the **schema** read surface (`/api/plugins/<id>/schema/*`) — one floor for both
+stores, so a plugin that already declares one is covered. `writableBy` has no schema counterpart: there are
+no schema writes over HTTP.
 
 Neither floor applies to the `USER` scope in either direction: no floor makes someone else's partition
 readable, none stands between a caller and their own, and `writableBy` does not gate it (it protects the
@@ -132,8 +137,9 @@ A bare `*` makes `writableBy` vestigial for shared scopes, but it is still requi
 Absent ⇒ `"doc"`. The doc store is `plugin_data`: scope + key → JSONB, GIN-indexed, addressed by scope and
 key. Anything belonging to one person goes in the `USER` scope; everything else in an entity scope.
 
-Relational needs (full-text search, revisions, backlinks) declare a schema instead — **this works as of core
-0.6.6**; earlier guidance that core rejects schema storage is obsolete:
+Relational needs (full-text search, revisions, backlinks) declare a schema instead — provisioning works as of
+core 0.6.6 and the **frontend read API since platformApi 0.7.0**; earlier guidance that core rejects schema
+storage, or that only the backend can reach it, is obsolete:
 
 ```json
 "storage": { "schema": {
@@ -160,8 +166,10 @@ Relational needs (full-text search, revisions, backlinks) declare a schema inste
   reserves room for index suffixes; a collision after truncation would silently merge two entities).
 - Provisioning runs **before `register()`**, transactionally, and is **additive only**: missing columns are
   added; a **changed field type refuses the plugin at load**. The plugin never writes DDL.
-- A schema plugin **also keeps its doc store**, and there is **no HTTP surface for the schema store** — the
-  frontend still reads only the doc store, so anything the UI needs must be projected into a doc key.
+- A schema plugin **also keeps its doc store**. Declaring a schema is also what makes `ctx.schema` non-`null`
+  in the frontend: the host serves `GET /api/plugins/<id>/schema/*` (**reads only**, gated by
+  `data.readableBy`) and a doc-store plugin 404s there. Writes stay with the backend — a frontend that must
+  write goes through the doc store and the backend ingests it. See `frontend.md`.
 - Purge drops the plugin's documents *and* its schema tables (config and the enabled flag survive).
 
 ## `config`

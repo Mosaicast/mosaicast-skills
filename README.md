@@ -10,7 +10,7 @@ Ships one plugin, **mosaicast-plugin-dev**, with three skills:
 | `scaffolding-a-mosaicast-plugin` | Starting a new plugin repo from the sample: layout, rename ritual, gradle/Vite setup, `build.sh`, shared boilerplate, CI, SPDX/DCO. |
 | `releasing-a-mosaicast-plugin` | Version anchors, `dist/` verification, installing into `MOSAICAST_PLUGINS_DIR`, and the load-failure modes to check. |
 
-Current contract: **`platformApi` 0.6.0** (SDK 0.6.0, core 0.6.x).
+Current contract: **`platformApi` 0.7.1** (SDK 0.7.1, core 0.6.8 hosting platformApi 0.7.x).
 
 ## Use it
 ```bash

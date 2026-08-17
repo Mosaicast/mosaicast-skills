@@ -4,7 +4,7 @@ Required by every repo's `docs/BRIEF.md` DoD (ARCHITECTURE §13.5). No core, no 
 
 ## Backend — `dev.mosaicast.plugin.testkit.*`
 
-`testImplementation("dev.mosaicast:plugin-testkit:0.6.0")`
+`testImplementation("dev.mosaicast:plugin-testkit:0.7.1")` — the Java fakes are unchanged since 0.6.0.
 
 | Fake | Notes |
 |---|---|
@@ -56,7 +56,7 @@ cheaper fix.
 Mount the element with `makeMockCtx(overrides)` and assert on the DOM.
 
 ```ts
-import { makeMockCtx, makeMockConsent, DEFAULT_THEME } from '@mosaicast/plugin-sdk/testing';
+import { makeMockCtx, makeMockConsent, makeMockSchema, DEFAULT_THEME } from '@mosaicast/plugin-sdk/testing';
 
 const ctx = makeMockCtx({
   scope: { type: 'episode', id: 'ep-1' },
@@ -68,17 +68,55 @@ expect(ctx.api.calls).toContainEqual({ method: 'get', path: 'data/episode/ep-1/l
 expect(ctx.logs).toEqual([]);
 ```
 
-`MockPluginContext` = `PluginContext` + `api.calls` / `api.responses` + `logs`. Defaults: site scope with id
-`main`, no episodes, anonymous user, empty filter, player at 0s, empty route, `en`, `progress → null`,
-`DEFAULT_THEME`, and a consent double that **denies everything except `necessary`**. `episodeLabels` is
-deliberately absent by default, so a component that assumes it is present fails here — which is the point.
+`MockPluginContext` = `PluginContext` + `api.calls` / `api.responses` + `logs` + `navigations`. Defaults:
+site scope with id `main`, no episodes, anonymous user, **`schema: null`**, empty filter, player at 0s, empty
+route, `en`, `progress → null`, `DEFAULT_THEME`, and a consent double that **denies everything except
+`necessary`**. `episodeLabels` is absent by default and `schema` is `null` by default on the same argument: a
+component written against a value that is always there never handles the case where it is not.
 
 `makeMockConsent(initial)` gives `grant` / `revoke` / `requests` / `autoGrantOnRequest` for testing the
 click-to-load path.
 
-Prefer this over a hand-rolled `PluginContext`: it stays in sync with `Unsubscribe` returns and the
-`ConsentApi` shape across SDK bumps, and a hand-rolled fake breaks on both every time the contract moves. If
-you do hand-roll one, every `onChange` must return a function and `consent` must implement all four methods.
+### `route` is the one override that merges (0.7.1)
+
+```ts
+const ctx = makeMockCtx({ route: { path: 'kraken' } });   // navigate still records, onChange still works
+// …mount, click a link…
+expect(ctx.navigations).toEqual([{ subpath: 'glossary/kraken', replace: false }]);
+```
+
+Every other member is all-or-nothing; `route` merges over the default because pinning a subpath is the common
+case. On **0.7.0** a hand-built override had to spell out `navigate` too (`PluginRoute` gained it as a
+required member) — that is the release's only compile break, and only `tsc --noEmit` catches it. Supplying
+your own `navigate` still opts out of the recorder, which is the one case where `navigations` stays empty.
+
+The double has no router and no URL, so `navigate` does **not** move `route.path`. Assert on `navigations`;
+drive a route change by rendering again with a different `path`.
+
+### `makeMockSchema(rows)` (0.7.0)
+
+```ts
+const schema = makeMockSchema({
+  page: [{ id: 1, slug: 'kraken', title: 'The Kraken', markdown: 'a big squid' }],
+});
+const ctx = makeMockCtx({ schema, route: { path: 'kraken' } });
+await mount(ctx);
+expect(schema.queries[0]).toMatchObject({ method: 'search', entity: 'page' });
+```
+
+A `SchemaClient` answering from plain arrays, with `queries` recorded and `rows` mutable. An entity absent
+from `rows` **rejects** the way the host 404s an undeclared one (every method is `async`, so it reaches your
+component as a rejection, not a synchronous throw).
+
+Its `search` is a **case-insensitive substring match, not Postgres full-text search** — no stemming, no
+`ts_rank` ordering. Use it to prove your component renders hits and handles none; prove the searching itself
+against a live host. It does share the host's one rule that matters — **empty text matches nothing** — and
+applies `where`/`orderBy`/`page`/`size` faithfully (`like` anchors `%` the way the host does).
+
+Prefer this over a hand-rolled `PluginContext`: it stays in sync with `Unsubscribe` returns, the `ConsentApi`
+shape and new members like `schema` / `route.navigate` across SDK bumps, and a hand-rolled fake breaks on all
+of them every time the contract moves. If you do hand-roll one, every `onChange` must return a function,
+`consent` must implement all four methods, and `route` must carry `navigate`.
 
 ## The manifest ↔ bundle contract test
 

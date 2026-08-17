@@ -59,8 +59,9 @@ List<OwnedDocEntry> queryAcrossUsers(String keyPrefix);          // since 0.5.0
   by the frontend against `data/user/me/…` and read back by the backend only in aggregate.
 - `put` throws `IllegalArgumentException` on a key violating `KEY_PATTERN`.
 - `DocEntry(String key, JsonNode value)` — `tools.jackson.databind.JsonNode`.
-- The interface **did not change in 0.6.0**. `backendOwned` is enforced by the host on the HTTP surface
-  only; your backend keeps writing those keys.
+- The interface **did not change in 0.6.0 or 0.7.x** — the Java half of the contract is untouched since
+  0.5.0 apart from the version constant. `backendOwned` is enforced by the host on the HTTP surface only;
+  your backend keeps writing those keys.
 
 ### Aggregates across users
 
@@ -107,7 +108,14 @@ Criteria.all();
 Op = EQ NE LT LTE GT GTE IN LIKE IS_NULL IS_NOT_NULL
 ```
 
-Remember the frontend cannot reach the schema store. Project anything the UI needs into a doc key.
+Since 0.7.0 the frontend **can read** these tables through `ctx.schema` (`select`/`search`/`find`/`count`,
+same vocabulary, `page`/`size` paging) — projecting the corpus into doc keys for the UI is obsolete. It
+stays **read-only** over HTTP: your backend is the only writer of relational truth. A frontend that must
+write puts a document in the doc store and this backend ingests it in `onSchedule(...)`.
+
+Note the two shapes that differ from the Java side, so a test written against one does not mislead you on
+the other: the frontend's `find` resolves `null` for a missing row (Java returns `Optional.empty()`), and an
+undeclared entity is a 404 from the host rather than an `IllegalArgumentException`.
 
 ## `FeedAccess` and `PluginConfig`
 

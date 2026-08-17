@@ -89,6 +89,14 @@ What to look for, beyond "it renders": horizontal overflow inside a shadow root,
 one-liner, a control smaller than a touch target on a phone, and the browser console — a CSP refusal for an
 undeclared consent host looks like "the embed just didn't load", not like an error.
 
+Two things only a live host can prove, because the test kit deliberately cannot:
+
+- **`ctx.route.navigate`** — click an internal link and watch the network panel: no bundle re-fetch, one new
+  history entry, a working back button, and the URL under `/p/<id>/`. `replace: true` should add no entry.
+  The mock records calls but has no router, so `route.path` never moves there.
+- **Full-text search through `ctx.schema`** — `makeMockSchema`'s `search` is a case-insensitive substring
+  match with no stemming and no `ts_rank` ordering. Ranking and stemming are only real against Postgres.
+
 ## 5. The loop
 
 ```bash
