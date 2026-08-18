@@ -58,13 +58,16 @@ which keys — and wait for a yes. Then prefer writing through the plugin's own 
 frontend, `ctx.store()` from the backend) over touching the database, so what you exercise is the real path.
 Clean up what you seeded when you are done, or say what you left behind.
 
-Two rules that hold in every case:
+Three rules that hold in every case:
 
 - Per-user data is written **as the signed-in user** against `data/user/me/…`. You cannot seed another
   person's partition — no API allows it, and the fact that you cannot is the security property. Test
   multi-user behaviour with the test kit's `InMemoryDocStore.asUser(...)`, not against a live host.
 - Do not seed a key your manifest lists in `data.backendOwned` — the host will refuse the client write with
   a 403, and that refusal is correct.
+- **Uploads are data too.** A file you upload while testing occupies the plugin's quota until something
+  deletes it, and nothing collects orphans — so on a shared or production instance, ask first and remove
+  what you stored (`ctx.blobs.remove(ref)` or the backend's `delete(ref)`) when you are done.
 
 ## 4. When you have both: test across viewports
 
@@ -88,6 +91,18 @@ when the host's theme flips.
 What to look for, beyond "it renders": horizontal overflow inside a shadow root, text clipped in the `card`
 one-liner, a control smaller than a touch target on a phone, and the browser console — a CSP refusal for an
 undeclared consent host looks like "the embed just didn't load", not like an error.
+
+Three things only a live host can prove, because the test kit deliberately cannot:
+
+- **`ctx.route.navigate`** — click an internal link and watch the network panel: no bundle re-fetch, one new
+  history entry, a working back button, and the URL under `/p/<id>/`. `replace: true` should add no entry.
+  The mock records calls but has no router, so `route.path` never moves there.
+- **Full-text search through `ctx.schema`** — `makeMockSchema`'s `search` is a case-insensitive substring
+  match with no stemming and no `ts_rank` ordering. Ranking and stemming are only real against Postgres.
+- **Uploads through `ctx.blobs`** — no double reads file formats, so the host's content sniffing (a `.png`
+  that is not one) and its **effective** limits (operator caps and any admin grant, visible in
+  Admin → the plugin's storage panel) can only be exercised live. Check both the happy path and a refusal:
+  a file over the ceiling → 413, a type off the allow-list → 415.
 
 ## 5. The loop
 

@@ -8,8 +8,9 @@ description: Use when cutting a release of a Mosaicast plugin, bumping its versi
 Two versions are in play and they are not the same thing:
 
 - **the plugin's own version** — SemVer, yours to choose, lives in three files
-- **`platformApi`** — the host contract the backend compiled against, currently **0.6.0**, matched by core on
-  exact `major.minor`
+- **`platformApi`** — the host contract the backend compiled against, currently **0.8.0**, matched by core on
+  exact `major.minor` (patch is free to the host — but keep one string across all four anchors, because the
+  contract test and the CI drift guard compare them literally)
 
 Getting either out of sync produces a plugin that builds cleanly and is rejected at load, quietly, with the
 reason only in the admin log viewer.
@@ -70,8 +71,8 @@ The SDK artifacts live on GitHub Packages, which **requires authentication even 
 in CI. Without it the backend build fails to resolve `dev.mosaicast:plugin-api` with a 401 that reads like
 the artifact does not exist.
 
-If the SDK version you need is not published yet (0.6.0 is on master but **untagged**), resolve it from a
-local checkout instead — `mavenLocal()` after `./gradlew publishToMavenLocal` in the SDK repo, or
+**0.8.0 is published** on both npm and GitHub Packages (`v0.8.0`), so no workaround is needed today. If a
+future SDK version you need is on master but **untagged**, resolve it from a local checkout instead — `mavenLocal()` after `./gradlew publishToMavenLocal` in the SDK repo, or
 `includeBuild("../mosaicast-plugin-sdk")`. Do not ship a release built that way without confirming the
 artifact is public first, or nobody else can rebuild it.
 
@@ -109,6 +110,9 @@ The folder name **must equal the manifest `id`**. Then verify in this order — 
 | same | a schema field whose **type changed** since the last load — provisioning is additive-only and refuses type changes |
 | same | `storage: "schema"` as a bare string, or a schema block with no entities |
 | same | unknown slot placement, `data.writableBy: "anonymous"`, a consent category containing a dot, a host without a scheme |
+| same | a `blobs` block with a non-positive limit, an empty `mimeTypes` list, or `image/svg+xml` in it |
+| uploads all fail with 415 | the install's `allowed-mime-types` does not include what you declared — the lists are intersected |
+| uploads fail with 413 at an unexpected size | an admin's per-plugin grant replaced your manifest's ask; read `…/blob/quota` |
 | loads, but the extension never runs | missing `annotationProcessor("org.pf4j:pf4j:…")`, so no extension index was generated |
 | loads, but shows stale/wrong data | old `dist/` — `build.sh` ran before the version bump |
 | a tile is blank | the slot's error boundary caught a thrown render; check the browser console and `ctx.log` |
@@ -118,5 +122,6 @@ The folder name **must equal the manifest `id`**. Then verify in this order — 
 Toggling a plugin off is immediate for every host-mediated surface — public manifest, data API, assets, deep
 link, scheduler ticks and backend writes — but the already-started backend stays in the process until core
 restarts. Deleting the folder makes the plugin dormant and **keeps its data**. Purge (admin) deletes its
-documents *and* drops its schema tables; the config and the enabled flag survive. Plan a purge before
+documents, drops its schema tables **and removes its stored files**; the config and the enabled flag
+survive. Plan a purge before
 reinstalling a plugin whose schema field types changed, since provisioning will otherwise refuse the load.
