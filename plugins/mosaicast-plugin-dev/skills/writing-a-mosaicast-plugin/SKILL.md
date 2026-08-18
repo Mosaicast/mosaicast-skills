@@ -1,6 +1,6 @@
 ---
 name: writing-a-mosaicast-plugin
-description: Use when creating or modifying a Mosaicast plugin (any mosaicast-plugin-* repo or the plugin-sample). Covers the plugin.json manifest (slots and placements, the page slot behind /p/<id>/*, data access floors, backendOwned keys, consent services, doc vs schema storage), the backend PluginBackend/PluginContext contract, per-user data in the USER scope, the frontend Web Component via the SDK ctx (including ctx.schema reads and ctx.route.navigate) and theme tokens, and testing against the SDK test kit. Trigger whenever writing the manifest, adding a slot, wiring ctx, storing per-user data, querying schema tables from the frontend, navigating inside a page plugin, declaring backend-owned or schema storage, bumping platformApi, or building a plugin's backend or frontend.
+description: Use when creating or modifying a Mosaicast plugin (any mosaicast-plugin-* repo or the plugin-sample). Covers the plugin.json manifest (slots and placements, the page slot behind /p/<id>/*, data access floors, backendOwned keys, consent services, doc vs schema storage, the blobs file-storage block), the backend PluginBackend/PluginContext contract, per-user data in the USER scope, the frontend Web Component via the SDK ctx (ctx.schema reads, ctx.blobs uploads, ctx.links, ctx.route.navigate) and theme tokens, and testing against the SDK test kit. Trigger whenever writing the manifest, adding a slot, wiring ctx, storing per-user data, uploading or serving files, linking to core pages, querying schema tables from the frontend, navigating inside a page plugin, declaring backend-owned or schema storage, bumping platformApi, or building a plugin's backend or frontend.
 ---
 
 # Writing a Mosaicast plugin
@@ -10,25 +10,25 @@ doc and this skill disagree, see "Which docs to trust" below.
 
 ## Version pins — get these wrong and the plugin does not load
 
-Contract version is **0.7.1** (`PlatformApi.VERSION`, `PLATFORM_API_VERSION`). The host demands an
-**exact `major.minor`** match; patch is free, so `0.7.0` and `0.7.1` are interchangeable to core (0.7.1 is a
-test-kit-only release). A `0.6.x` manifest is *rejected at load*, not warned about.
+Contract version is **0.8.0** (`PlatformApi.VERSION`, `PLATFORM_API_VERSION`), and core **0.6.14** hosts it.
+The host demands an **exact `major.minor`** match; patch is free. A `0.7.x` manifest is *rejected at load*,
+not warned about.
 
 ```json5
-"platformApi": "0.7.1"                                  // plugin.json
+"platformApi": "0.8.0"                                  // plugin.json
 ```
 ```kotlin
-compileOnly("dev.mosaicast:plugin-api:0.7.1")           // backend/build.gradle.kts
+compileOnly("dev.mosaicast:plugin-api:0.8.0")           // backend/build.gradle.kts
 compileOnly("org.pf4j:pf4j:3.12.0")
 annotationProcessor("org.pf4j:pf4j:3.12.0")             // mandatory: generates the @Extension index
-testImplementation("dev.mosaicast:plugin-testkit:0.7.1")
+testImplementation("dev.mosaicast:plugin-testkit:0.8.0")
 ```
 ```json5
-"@mosaicast/plugin-sdk": "0.7.1"                        // frontend/package.json
+"@mosaicast/plugin-sdk": "0.8.0"                        // frontend/package.json
 ```
 
-Both halves of `0.7.1` are published (npm, and GitHub Packages for the Java artifacts) — no `mavenLocal()`
-workaround needed. Maven is GitHub Packages
+Both halves of `0.8.0` are published and tagged `v0.8.0` (npm, and GitHub Packages for the Java artifacts) —
+no `mavenLocal()` workaround needed. Maven is GitHub Packages
 (`https://maven.pkg.github.com/Mosaicast/mosaicast-plugin-sdk`), which needs a PAT with `read:packages`
 **even for public reads**. Jackson is **3.2.1** (`tools.jackson.*`), not `com.fasterxml`. **Pin the same
 string in all four places** — the CI drift guard and the manifest contract test both compare them.
@@ -57,6 +57,11 @@ To re-check the pin yourself:
    schema writes over HTTP: the backend stays the only writer of relational truth, and a frontend that must
    write puts a doc in the doc store for the backend to ingest on its schedule (eventually consistent — design
    the UI for it).
+8. **File storage is opt-in and `null` without a manifest `blobs` block** — `ctx.blobs` (TS), `ctx.blobs()`
+   (Java), and every `…/blob` path answers 404. Unlike schema, **writes are the point**: `data.writableBy`
+   plus the quota is the whole authorization story.
+9. **Store the `ref`, never the URL.** A ref is the file's identity; `urlFor(ref)` is derived at render time
+   and the host may reshape it. And **nothing collects orphans** — delete what you stop pointing at.
 
 ## Before you build: ask for a browser and an instance
 
@@ -87,9 +92,10 @@ core only reads what lands in `dist/`. `build.sh` writes **only** `dist/` and ne
 into `$MOSAICAST_PLUGINS_DIR` and restarting is a separate manual step (an optional `install.sh` may
 shortcut it, never require it).
 
-Four distinct URL namespaces, don't conflate them:
+Five distinct URL namespaces, don't conflate them:
 - `/api/plugins/<id>/data/*` — the host's fixed generic doc-store API (you do not author routes)
 - `/api/plugins/<id>/schema/*` — the host's read-only schema API, behind `ctx.schema` (schema plugins only)
+- `/api/plugins/<id>/blob/*` — the host's file API, behind `ctx.blobs` (plugins declaring `blobs` only)
 - `/plugins/<id>/assets/*` — static frontend bundle
 - `/p/<id>/*` — deep-linkable plugin pages, surfaced as `ctx.route`
 
@@ -97,27 +103,29 @@ Four distinct URL namespaces, don't conflate them:
 
 | You are doing | Read |
 |---|---|
-| `plugin.json`: fields, slots, placements, floors, `backendOwned`, consent, config, schema declaration | `references/manifest.md` |
-| Java backend: `PluginContext`, `DocStore`, `SchemaStore`, aggregates, scheduling, extension points | `references/backend.md` |
-| Web Component: `ctx` surface, `ctx.schema` queries, `route.navigate`, doc-store HTTP calls, CSP, theme, i18n | `references/frontend.md` |
+| `plugin.json`: fields, slots, placements, floors, `backendOwned`, consent, config, schema and `blobs` declarations | `references/manifest.md` |
+| Java backend: `PluginContext`, `DocStore`, `SchemaStore`, `PluginBlobs`, aggregates, scheduling, extension points | `references/backend.md` |
+| Web Component: `ctx` surface, `ctx.schema` queries, `ctx.blobs` uploads, `ctx.links`, `route.navigate`, doc-store HTTP calls, CSP, theme, i18n | `references/frontend.md` |
 | Tests (required by the BRIEF's DoD) | `references/testing.md` |
 | Browser + live-instance setup, viewport matrix, data-safety rules, the build→install→restart loop | `references/dev-environment.md` |
-| Moving an existing plugin from 0.6.0 to 0.7.x | `references/migrating.md` |
+| Moving an existing plugin from 0.7.x to 0.8.0 | `references/migrating.md` |
 
-Live reference implementation: **`mosaicast-plugin-sample` v2.8.0** (on SDK 0.7.1). Its `README.md` carries
-the worked `curl` forgery that motivates `backendOwned`, its page slot uses `ctx.route.navigate`, and its
-`docs/BRIEF.md` pattern is the definition of done for every plugin repo.
+Live reference implementation: **`mosaicast-plugin-sample` v2.9.0** (on SDK 0.8.0). It declares a `blobs`
+block and exercises `ctx.blobs` (upload, `urlFor`, the `null` degrade path) and `ctx.links.episode/feed`; its
+`README.md` carries the worked `curl` forgery that motivates `backendOwned`, its page slot uses
+`ctx.route.navigate`, and its `docs/BRIEF.md` pattern is the definition of done for every plugin repo.
 
 ## Which docs to trust
 
 - **SDK `README.md` / `CHANGELOG.md` / `MIGRATION.md` and the Javadoc/TSDoc** — accurate, take signatures from here.
-- **`docs/ARCHITECTURE.md`** — now correct on the `data` block and `backendOwned` (§7.2), the `USER` scope,
-  `queryAcrossUsers` and the extension points (§7.4), backend-owned keys and the schema provider (§7.6), and
-  purge (§7.8). Still stale on: the `"platformApi": "1.x"` example (that string does not even parse), the
-  example's `placement: "admin"` slot (accepted by validation, rendered nowhere), §7.3's region list (missing
-  `page`), §7.5's `ctx` block (missing `episodeLabels`, `log`, `consent.granted/request`, `schema`,
-  `route.navigate`, and the `Unsubscribe` returns), §7.6 (no mention of the schema **read** HTTP surface
-  shipped in 0.7.0), and a doc-store "indexable fields" escape hatch that was never implemented.
+- **`docs/ARCHITECTURE.md`** — much fresher than it used to be: correct on the `data` block and
+  `backendOwned` (§7.2), the `USER` scope, `queryAcrossUsers` and the extension points (§7.4), the schema
+  provider **and its read HTTP surface** (§7.6), the `blobs` manifest block and file storage (§7.2, §11,
+  §11.1), and purge (§7.8). §7.5's `ctx` block now lists `schema`, `blobs`, `links` and `route.navigate`.
+  Still stale on: the `"platformApi": "1.x"` example (that string does not even parse), the example's
+  `placement: "admin"` slot (accepted by validation, rendered nowhere), §7.3's region list (missing `page`),
+  §7.5's `ctx` block (still missing `episodeLabels`, `log`, `consent.granted/request` and the `Unsubscribe`
+  returns), and a doc-store "indexable fields" escape hatch that was never implemented.
 - **`mosaicast-plugin-bingo` / `-stats` / `-wiki`** — bootstrap-only repos carrying a **pre-0.4.0**
   `ARCHITECTURE.md` copy and BRIEFs that specify the legacy consent shape and the per-user-key IDOR
   (`card:fan:{userId}`). Treat their docs as untrusted; the SDK and the sample win.

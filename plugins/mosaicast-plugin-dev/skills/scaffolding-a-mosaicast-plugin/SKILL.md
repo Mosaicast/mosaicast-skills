@@ -110,12 +110,12 @@ repositories {
 }
 
 dependencies {
-    compileOnly("dev.mosaicast:plugin-api:0.7.1")
+    compileOnly("dev.mosaicast:plugin-api:0.8.0")
     compileOnly("org.pf4j:pf4j:3.12.0")
     annotationProcessor("org.pf4j:pf4j:3.12.0")   // generates the extension index — without it nothing loads
     testImplementation(platform("org.junit:junit-bom:5.11.0"))
     testImplementation("org.junit.jupiter:junit-jupiter")
-    testImplementation("dev.mosaicast:plugin-testkit:0.7.1")
+    testImplementation("dev.mosaicast:plugin-testkit:0.8.0")
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
 }
 ```
@@ -191,7 +191,7 @@ and `license-header.yml` (SPDX header on changed source files).
 
 Keep it under ~200 lines. It must state: the mandatory reads (ARCHITECTURE wins on conflict; BRIEF defines
 scope), the stack, the commands, and the binding conventions — including the current `platformApi` pin
-(**0.7.1**, exact `major.minor` match, rejected at load on mismatch), SDK-only imports, per-user data in the
+(**0.8.0**, exact `major.minor` match, rejected at load on mismatch), SDK-only imports, per-user data in the
 `USER` scope, the manifest `data` floors vs slot `visibleTo`, SPDX/DCO, and that tests are part of the work.
 End with a pointer telling Claude to check for the **writing-a-mosaicast-plugin** skill before building, and
 to pause and recommend installing it if absent.

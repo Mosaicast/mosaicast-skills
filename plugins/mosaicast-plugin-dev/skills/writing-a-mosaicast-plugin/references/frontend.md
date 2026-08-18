@@ -26,20 +26,25 @@ episode?: { status: 'PLANNED'|'PUBLISHED'|'WITHDRAWN' }         // see "what the
 user: { id: string; role: 'admin'|'podcaster'|'fan' } | null    // null = anonymous
 api: { get/post/put/delete<T>(path, body?): Promise<T> }        // /api/plugins/<id>/*, auth attached
 schema: SchemaClient | null                                     // null unless the manifest declares storage.schema
+blobs: BlobClient | null                                        // null unless the manifest declares a blobs block
 log(level: 'debug'|'info'|'warn'|'error', message: string): void
 consent: { has(cat), granted(), request(cat): Promise<boolean>, onChange(cb): Unsubscribe }
 filter:  { current(): FilterState; onChange(cb): Unsubscribe }  // read-only — plugins consume, never define axes
 player:  { currentTime(): number; seekTo(s): void; on(ev, cb): Unsubscribe }
 route:   { path: string; onChange(cb): Unsubscribe;             // subpath under /p/<id>/
            navigate(subpath, { replace? }): void }              // SPA move inside your own subtree
+links:   { episode(slug, { t? }): string;                       // host URL shapes — strings, not navigation
+           feed(slug, { season?, tag?, order? }): string }
 locale:  { current(): string; onChange(cb): Unsubscribe }
 progress:{ get(episodeId): Promise<number | null> }             // core listening progress, seconds
 theme: ThemeTokens
 ```
 
 Also exported: `PLATFORM_API_VERSION`, `SELF_SCOPE_ID` (`'me'`), `DataScopeType`, `DocEntry<T>`,
-`PagedDocs<T>`, `PluginRoute`, `SchemaClient`/`SchemaQuery`/`SchemaPredicate`/`SchemaOp`/`SchemaPage<T>`,
-`resolveArtwork(snapshot)`, `createPluginI18n`, and the documentation-only manifest types.
+`PagedDocs<T>`, `PluginRoute`, `PluginLinks`, `SchemaClient`/`SchemaQuery`/`SchemaPredicate`/`SchemaOp`/
+`SchemaPage<T>`, `BlobClient`/`BlobInfo`/`BlobPage`/`BlobQuota`, `resolveArtwork(snapshot)`,
+`createPluginI18n`, and the documentation-only manifest types. Note there is **no** TS type for the
+manifest's `blobs` block — core validates it, and nothing in the SDK reads `plugin.json`.
 
 ## What the host actually supplies today
 
@@ -63,8 +68,8 @@ a detached shadow root is the bug you cannot see.
 
 ## `ctx.api` — the host's fixed doc-store surface
 
-You do not author backend routes. `ctx.api` is the **doc store's** surface (the schema store has its own,
-below), and the host exposes exactly:
+You do not author backend routes. `ctx.api` is the **doc store's** surface — the schema store and the blob
+store have their own, below — and the host exposes exactly:
 
 ```
 GET    data/{scopeType}/{scopeId}/{key}
@@ -109,8 +114,8 @@ path until everyone has been back, then drop it and have the backend delete what
 
 ## `ctx.schema` — the host's read-only schema surface (0.7.0)
 
-The frontend counterpart of the Java `SchemaStore`, and the **second** host surface — separate paths,
-separate rules. `ctx.schema` is `null` unless the manifest declares `storage.schema`, mirroring
+The frontend counterpart of the Java `SchemaStore`, and the second of the host's three surfaces — separate
+paths, separate rules. `ctx.schema` is `null` unless the manifest declares `storage.schema`, mirroring
 `ctx.schema()` on the backend, so TypeScript makes you handle the doc-store case:
 
 ```ts
@@ -191,6 +196,76 @@ ctx.route.navigate('index', { replace: true });    // swaps the entry: no back-b
   need it; `navigate` only takes over the plain-click path.
 - **Never `history.pushState` + a synthetic `popstate`.** It happens to work against the host's current
   router and is not part of the contract.
+
+## `ctx.blobs` — file storage (0.8.0)
+
+`null` unless the manifest declares a `blobs` block, exactly like `ctx.schema`. Unlike the schema surface,
+**writes are the point**: a file carries no relational invariant for plugin code to enforce, so
+`data.writableBy` plus the quota is the whole authorization story and your own editing UI uploads directly.
+
+```ts
+const blobs = ctx.blobs;
+if (!blobs) return;                                   // this plugin declared no `blobs` block
+
+const stored = await blobs.upload(file);              // a File from <input type="file">
+img.src = blobs.urlFor(stored.ref);                   // derive at render time
+await ctx.api.put('data/site/main/logo', { ref: stored.ref });   // store the ref, never the URL
+```
+
+```
+upload(file: File | Blob, { filename? })  → BlobInfo   // multipart POST; filename overrides the File's own
+list({ page?, size? })                    → BlobPage   // newest first; { items, page, size, total }
+remove(ref)                               → void       // idempotent
+urlFor(ref)                               → string     // /api/plugins/<id>/blob/<ref>, root-relative
+quota()                                   → BlobQuota  // { usedBytes, quotaBytes, maxFileBytes }
+```
+
+`BlobInfo` = `{ ref, filename: string | null, mime, size, updatedAt }`. **`mime` is what the host determined
+from the bytes**, not what the browser claimed — the two differ exactly when someone lied, which is why it is
+the value worth keeping.
+
+Rules that matter:
+
+- **The `ref` is the identity; the URL is derived.** Store the ref in your doc/row and call `urlFor` at
+  render time. A stored URL is a copy of a decision the host is entitled to change.
+- **Nothing collects orphans.** A file outlives the document that named it and only your plugin knows which
+  those are — delete what you stop pointing at, or sweep from the backend on a schedule.
+- **Surface refusals.** The person who picked the file is the only one who can pick a different one. The
+  host checks, in order: size against your effective ceiling, the declared type against the effective
+  allow-list, the *actual* type sniffed from the leading bytes, then the quota. **SVG is never accepted.**
+- **Read the quota first.** `quota()` reports the *effective* numbers (operator caps and any admin grant),
+  not what your manifest asked for. Telling someone the ceiling beats refusing them after an upload.
+
+Status codes worth handling: **404** no `blobs` block, unknown/disabled plugin, or an unknown ref · **413
+`problems/blob-quota-exceeded`** the file is over the per-file ceiling or would exceed the quota · **415
+`problems/blob-type-not-allowed`** the declared type is not permitted, or the bytes contradict it (worded
+apart on purpose — the fixes differ: send a smaller file versus delete something first) · **403** below the
+relevant `data` floor. Blob writes also sit in the upload rate-limit bucket, matched by path shape, so
+ordinary doc-store writes are unaffected.
+
+Serving is **same-origin under `/api/`**, so rendering your own upload needs **no CSP host and no consent
+decision** — which an external image URL cannot say. Downloads support `Range` (206) and are cached
+immutably, since a ref is a fresh UUID per upload and never reused.
+
+## `ctx.links` — the host's own URL shapes (0.8.0)
+
+```ts
+ctx.links.episode('kraken')               // /episodes/kraken
+ctx.links.episode('kraken', { t: 724 })   // /episodes/kraken?t=724   (12:04)
+ctx.links.feed('main', { season: '2' })   // /feeds/main?season=2
+ctx.links.feed('main', { order: 'oldest', tag: 'interview' })
+```
+
+**Strings, not navigation** — put the result in a real `href` and let the visitor click. It grants no new
+capability (you could always write any `href`); it moves knowledge of core's URL shapes back to the host, so
+a plugin that linked to an episode stops being a thing that breaks when a route changes. Deliberately *not*
+part of `ctx.route`, which is namespace-confined by construction.
+
+Two details the builders handle for you: `?t=0` and a non-finite or negative `t` are dropped (one moment,
+one URL), and `order: 'newest'` is left out because it is the host's default and what `SiteUrls`
+canonicalizes to. `?t=` seeks the player to that second and **beats the listener's stored position without
+overwriting it** — the position is only written back once playback advances five seconds past the shared
+one.
 
 ## Logging
 

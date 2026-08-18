@@ -3,11 +3,12 @@
 Implement `PluginBackend.register(PluginContext ctx)` on an `@Extension` class in package
 `dev.mosaicast.plugin.<name>.*`. Compile against the SDK only — never core — and stay Spring-free.
 
-## `PluginContext` — six accessors, exactly
+## `PluginContext` — seven accessors, exactly
 
 ```java
 DocStore store();                                // the generic doc store
 SchemaStore schema();                            // null unless the manifest declares schema entities
+PluginBlobs blobs();                             // null unless the manifest declares a blobs block (0.8.0)
 PluginConfig config();
 FeedAccess feeds();
 org.slf4j.Logger logger();                       // already named "plugin.<pluginId>"
@@ -59,9 +60,9 @@ List<OwnedDocEntry> queryAcrossUsers(String keyPrefix);          // since 0.5.0
   by the frontend against `data/user/me/…` and read back by the backend only in aggregate.
 - `put` throws `IllegalArgumentException` on a key violating `KEY_PATTERN`.
 - `DocEntry(String key, JsonNode value)` — `tools.jackson.databind.JsonNode`.
-- The interface **did not change in 0.6.0 or 0.7.x** — the Java half of the contract is untouched since
-  0.5.0 apart from the version constant. `backendOwned` is enforced by the host on the HTTP surface only;
-  your backend keeps writing those keys.
+- **`DocStore` itself has not changed since 0.5.0.** (0.8.0 moved the Java contract only by adding
+  `PluginContext.blobs()`.) `backendOwned` is enforced by the host on the HTTP surface only; your backend
+  keeps writing those keys.
 
 ### Aggregates across users
 
@@ -116,6 +117,44 @@ write puts a document in the doc store and this backend ingests it in `onSchedul
 Note the two shapes that differ from the Java side, so a test written against one does not mislead you on
 the other: the frontend's `find` resolves `null` for a missing row (Java returns `Optional.empty()`), and an
 undeclared entity is a 404 from the host rather than an `IllegalArgumentException`.
+
+## `PluginBlobs` (only when the manifest declares a `blobs` block)
+
+`ctx.blobs()` is `null` otherwise — same shape and same reasoning as `ctx.schema()`. The Java half exists
+largely for what only a backend can do: fetching on a schedule, and **collecting the orphans nothing else
+collects**.
+
+```java
+BlobInfo        put(String filename, String mime, InputStream data);   // stream read to end, NOT closed
+Optional<BlobInfo> stat(String ref);
+InputStream     open(String ref);                                      // streaming; you close it
+boolean         delete(String ref);                                    // idempotent
+List<BlobInfo>  list(int page, int size);                              // newest first; host caps size
+String          urlFor(String ref);                                    // root-relative, host-served
+BlobQuota       quota();                                               // effective, not what you declared
+```
+
+```java
+record BlobInfo(String ref, String filename, String mime, long size, Instant updatedAt) {}
+record BlobQuota(long usedBytes, long quotaBytes, long maxFileBytes) { long remainingBytes(); }
+```
+
+```java
+PluginBlobs blobs = ctx.blobs();
+try (InputStream in = Files.newInputStream(path)) {
+    BlobInfo stored = blobs.put("architecture.png", "image/png", in);
+    ctx.store().put(Scope.site(), "diagram", Map.of("ref", stored.ref()));   // store the ref
+}
+```
+
+- **`put` throws `IllegalArgumentException`** for all four refusals: type not allowed, bytes contradicting
+  the declared type, over the per-file ceiling, or over the quota. `quota()` is how you see them coming.
+- **`mime` on the way back is what the host sniffed**, not what you claimed. SVG is never storable.
+- `stat`/`open` see only your own namespace — another plugin's ref is indistinguishable from a missing one.
+- **The ref is the identity**; `urlFor(ref)` is derived and unchecked (it does not verify the file exists).
+  Never store a URL, never build a ref.
+- A file outlives the document that named it. A scheduled sweep — list what you have, drop what nothing
+  points at — is the plugin's job, because only the plugin knows which those are.
 
 ## `FeedAccess` and `PluginConfig`
 

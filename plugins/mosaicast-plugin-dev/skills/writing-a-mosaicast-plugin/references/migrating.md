@@ -1,71 +1,76 @@
-# Migrating an existing plugin to 0.7.x
+# Migrating an existing plugin to 0.8.0
 
 The SDK's own `MIGRATION.md` (in the `mosaicast-plugin-sdk` checkout) is the authoritative checklist for the
 **SDK** half — read it, it is short. This file adds the **core-side** changes it does not cover, because
 core moved too.
 
-Coming from `0.5.x`? Do the 0.6.0 migration first (`data.backendOwned`, the keys only your backend may
-write), then this.
+Coming from `0.6.x`? Do the 0.7.0 migration first (the frontend schema client and `route.navigate`), then
+this.
 
 ## The SDK half, in brief
 
-**No plugin code written against 0.6.0 changes behaviour.** Both additions are new surface. The one thing
-that stops compiling is a *test* — and only on 0.7.0.
+**A version bump, and nothing else** unless you implement `PluginContext` yourself. Everything in 0.8.0 is
+new surface: no plugin code written against 0.7.1 changes behaviour, and **no existing test double breaks**
+— `FakePluginContext`'s four-argument form still compiles and still means "no file storage".
 
-1. `plugin.json` → `"platformApi": "0.7.1"`; `build.gradle.kts` → `plugin-api` / `plugin-testkit` `0.7.1`;
-   `package.json` → `@mosaicast/plugin-sdk` `0.7.1`. Both halves are published (npm + GitHub Packages), so no
-   `mavenLocal()` detour. You have no choice about timing: the moment the host runs 0.7.x, every 0.6.x plugin
-   is rejected at load.
-2. **Take 0.7.1, not 0.7.0.** It is test-kit-only — same contract, `platformApi` still matches on
-   `major.minor` — and it makes step 3 a no-op.
-3. **A hand-built `route` override needs `navigate` on 0.7.0.** `PluginRoute` gained it as a required member,
-   so `route: { path: 'kraken', onChange: () => () => {} }` no longer satisfies the type. On **0.7.1** the
-   override *merges* over the default instead: drop the stubs and write `route: { path: 'kraken' }`, keeping
-   the `navigations` recorder. Your test runner will not catch this either way — **only `tsc --noEmit`
-   will**, which is the argument for having a `typecheck` script at all.
-4. **If your frontend reaches the schema store through doc-key projections, stop.** `ctx.schema` reads the
-   provisioned tables directly (`select`/`search`/`find`/`count`), including the full-text index. It is
-   `null` for a doc-store plugin, so every use goes behind a `null` check. Reads only — the backend is still
-   the only writer of relational truth.
-5. **If you have a `page` slot, replace internal `<a href>` full loads and any `history.pushState` +
-   synthetic `popstate` with `ctx.route.navigate(subpath)`.** Keep the `href` on the anchor; `navigate` takes
-   over the plain-click path only.
+1. `plugin.json` → `"platformApi": "0.8.0"`; `build.gradle.kts` → `plugin-api` / `plugin-testkit` `0.8.0`;
+   `package.json` → `@mosaicast/plugin-sdk` `0.8.0`. Both halves are published and tagged `v0.8.0`. You have
+   no choice about timing: the moment the host runs 0.8.x, every 0.7.x plugin is rejected at load.
+2. **If you hand-roll a `PluginContext`** (Java) rather than using `FakePluginContext`, add `blobs()` —
+   returning `null` is correct for a plugin that declares no `blobs` block. On the TS side a hand-rolled
+   `ctx` needs `blobs` and `links` too; `makeMockCtx` is the cheaper answer.
+3. **Optional: store files.** Declare a `blobs` block, then `ctx.blobs` (TS) / `ctx.blobs()` (Java) stops
+   being `null`. Store the **ref**, never the URL; surface refusals to the person who picked the file; and
+   delete what you stop pointing at, because nothing collects orphans.
+4. **Optional: replace hardcoded core URLs with `ctx.links`.** If you wrote `` `/episodes/${slug}` ``
+   anywhere, that is `ctx.links.episode(slug)` now — same string today, and the host's problem when a route
+   changes. `ctx.links.episode(slug, { t })` is the timestamp deep link.
 
-Quick checklist: `platformApi` 0.7.1 in all four places · `tsc --noEmit` clean · every `ctx.schema` use
-behind a `null` check · no frontend code expecting a schema **write** · internal page links call `navigate`
-and keep their `href` · no `pushState`/`popstate` left · tests green against testkit / `makeMockCtx` 0.7.1.
+Quick checklist: `platformApi` 0.8.0 in all four places · `tsc --noEmit` clean · every `ctx.blobs` use behind
+a `null` check · refs stored, never URLs · a refusal path the UI actually shows · no hardcoded `/episodes/…`
+or `/feeds/…` left · tests green against testkit / `makeMockCtx` 0.8.0.
 
 ## The core half — what changed under you
 
-Core is at **0.6.8** and compiles against `plugin-api` **0.7.0** (so it accepts `0.7`, `0.7.0`, `0.7.1`).
-Note core's own app version and the SDK's are independent schemes.
+Core is at **0.6.14** and compiles against `plugin-api` **0.8.0** (core's app version and the SDK's are
+independent schemes). Since the 0.7.x-era skills, these are the changes a plugin author can see:
 
-**The schema store has an HTTP read surface** (`GET /api/plugins/<id>/schema/*`), gated by the same
-`data.readableBy` floor as the doc store, and served only to a plugin that declares `storage.schema` — a
-doc-store plugin 404s there. That is what `ctx.schema` talks to; see `frontend.md` for the query grammar and
-the status codes.
+**File storage exists** (core 0.6.11, `POST /api/plugins/{id}/blob` + four more paths). Opt-in through the
+manifest `blobs` block; without it every path is a 404. The operator caps both ceilings and owns the MIME
+allow-list, and **an admin can grant per-plugin limits in the admin panel** (core 0.6.13) — a grant
+*replaces* the manifest's ask rather than being minimised with it, so `…/blob/quota` is the only honest
+source for what you actually got. Refusals are **413** (size/quota) and **415** (declared or actual type),
+with distinct problem types. SVG is never storable, and a manifest asking for it is rejected at load.
 
-**`ctx.route.navigate` is wired to the shell's router.** The host confines the target to `/p/<pluginId>/`:
-a leading `/` is stripped and `.`/`..` segments are dropped, so another plugin's route is unnameable rather
-than merely refused. In a mount with no router above it, `navigate` degrades to a no-op.
+**`ctx.links.episode/feed`** (core 0.6.11) — the host's own URL shapes as plain string builders.
 
-**A route change no longer needs a subscription.** The shell rebuilds `ctx` when the subpath changes and
-re-assigns it, which re-runs your render after your previous cleanup. `route.onChange` is still an inert
-no-op — read `ctx.route.path` at render time.
+**An episode link can point at a moment** (core 0.6.9): `/episodes/{slug}?t=754`, which is what
+`ctx.links.episode(slug, { t })` produces. An explicit `t` beats the listener's stored progress **without
+overwriting it** — the position is only written back once playback advances five seconds past the shared
+one. Unparsable values are dropped rather than rejected, so a mangled timestamp still opens the episode.
+
+**The shell has its own share dialog** on episodes, feed tabs and the site panel (core 0.6.12) — prepared
+destinations plus a start-at row. It makes **no consent decision** and loads no third-party script. Do not
+build a second one into a plugin tile.
+
+**Global upload size rose to 12 MB** (`spring.servlet.multipart.max-file-size`) so it clears the plugin
+ceiling, and **plugin blob writes join the upload rate-limit bucket**, matched by path shape
+(`/api/plugins/*/blob`), so ordinary doc-store writes stay out of a bucket sized for files.
 
 Still true from the 0.6.x era, worth re-checking on an older manifest:
 
+- **The schema store has an HTTP read surface** (core 0.6.8), gated by `data.readableBy`; `ctx.schema` is
+  `null` for a doc-store plugin. Projecting a corpus into doc keys for the UI is obsolete.
+- **`ctx.route.navigate`** is wired to the shell's router and namespace-confined host-side; a route change
+  rebuilds `ctx` and re-runs your render, while `route.onChange` stays an inert no-op.
 - **Extension points run on the instance `register(ctx)` ran on** (core 0.6.7). Delete any `static ctx`
   workaround in a `ShareMetadataProvider` / `SitemapProvider`.
-- **A deep link needs a `page` slot** (`{ "scope": "site", "placement": "page" }`), or `/p/<id>/*` is a real
-  404 — and without one `navigate` has nowhere to go.
-- **`placement: "admin"` renders nowhere.** Move that UI to a `sidebar` slot with `visibleTo: "podcaster"`.
-- **Read floors are not inferred from slots.** An anonymous display slot plus no `data` block means 403 on
-  reads — declare `"readableBy": "anonymous"` if the data really is public. This now governs the schema
-  surface too.
-- **Strict media sources** (core 0.6.1, off by default): if an operator enables
-  `mosaicast.security.strict-media-sources`, `img-src`/`media-src` narrow to feed-derived origins plus your
-  *consented* hosts. Declare the origins you load media from in `consent.services[].hosts` now.
+- **A deep link needs a `page` slot**; **`placement: "admin"` renders nowhere**; **read floors are not
+  inferred from slots** — an anonymous display slot plus no `data` block means 403 on reads, on all three
+  surfaces now.
+- **Strict media sources** (core 0.6.1, off by default) narrow `img-src`/`media-src` to feed-derived origins
+  plus your *consented* hosts. Note this is one more reason to serve images you own through `ctx.blobs`:
+  host-served blobs are same-origin, so they need no CSP host and make no consent decision.
 
 ## After the bump
 
