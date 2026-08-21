@@ -1,6 +1,6 @@
 ---
 name: writing-a-mosaicast-plugin
-description: Use when creating or modifying a Mosaicast plugin (any mosaicast-plugin-* repo or the plugin-sample). Covers the plugin.json manifest (slots and placements, the page slot behind /p/<id>/*, data access floors, backendOwned keys, consent services, doc vs schema storage, the blobs file-storage block), the backend PluginBackend/PluginContext contract, per-user data in the USER scope, the frontend Web Component via the SDK ctx (ctx.schema reads, ctx.blobs uploads, ctx.links, ctx.route.navigate) and theme tokens, and testing against the SDK test kit. Trigger whenever writing the manifest, adding a slot, wiring ctx, storing per-user data, uploading or serving files, linking to core pages, querying schema tables from the frontend, navigating inside a page plugin, declaring backend-owned or schema storage, bumping platformApi, or building a plugin's backend or frontend.
+description: Use when creating or modifying a Mosaicast plugin (any mosaicast-plugin-* repo or the plugin-sample). Covers the plugin.json manifest (slots and placements, the page slot behind /p/<id>/*, data access floors, backendOwned keys, consent services, doc vs schema storage, the blobs file-storage block, the license/author/homepage/attribution credit fields), the backend PluginBackend/PluginContext contract, per-user data in the USER scope, the frontend Web Component via the SDK ctx (ctx.schema reads, ctx.blobs uploads, ctx.links, ctx.route.navigate) and theme tokens including the --mc-icon-* icon set, testing against the SDK test kit, and installing a plugin by spec (owner/repo@tag#sha256). Trigger whenever writing the manifest, adding a slot, wiring ctx, storing per-user data, uploading or serving files, linking to core pages, querying schema tables from the frontend, navigating inside a page plugin, declaring backend-owned or schema storage, styling a plugin tile's icons, crediting a plugin's license or data source, bumping platformApi, installing or releasing a plugin, or building a plugin's backend or frontend.
 ---
 
 # Writing a Mosaicast plugin
@@ -62,6 +62,12 @@ To re-check the pin yourself:
    plus the quota is the whole authorization story.
 9. **Store the `ref`, never the URL.** A ref is the file's identity; `urlFor(ref)` is derived at render time
    and the host may reshape it. And **nothing collects orphans** — delete what you stop pointing at.
+10. **Icons are a mask, never a `background-image`.** `mask-image: var(--mc-icon-x); background: currentColor`
+    takes your colour and re-themes with everything else; a background image bakes in a colour and ignores
+    the theme.
+11. **`license`/`author`/`homepage`/`attribution` need no `platformApi` bump — and bumping it for them is
+    actively harmful.** They are unvalidated manifest fields; `platformApi` compatibility is an exact
+    `major.minor` match, so a bump for a non-breaking field change would reject every installed plugin.
 
 ## Before you build: ask for a browser and an instance
 
@@ -90,7 +96,9 @@ widths and you do not control any of them. Details, the full loop and what to lo
 Backend JAR (PF4J extension) + frontend Web Component bundle + `plugin.json`. No forced internal layout —
 core only reads what lands in `dist/`. `build.sh` writes **only** `dist/` and never touches core; copying
 into `$MOSAICAST_PLUGINS_DIR` and restarting is a separate manual step (an optional `install.sh` may
-shortcut it, never require it).
+shortcut it, never require it). Since core 0.6.15 a *released* plugin can also be installed by spec —
+`owner/repo@tag#sha256:…`, resolved by `scripts/install-plugin.sh` or the container's `MOSAICAST_PLUGINS` —
+without touching the filesystem by hand; see `references/dev-environment.md`.
 
 Five distinct URL namespaces, don't conflate them:
 - `/api/plugins/<id>/data/*` — the host's fixed generic doc-store API (you do not author routes)
@@ -103,11 +111,11 @@ Five distinct URL namespaces, don't conflate them:
 
 | You are doing | Read |
 |---|---|
-| `plugin.json`: fields, slots, placements, floors, `backendOwned`, consent, config, schema and `blobs` declarations | `references/manifest.md` |
+| `plugin.json`: fields, slots, placements, floors, `backendOwned`, consent, config, schema, `blobs` and credit (`license`/`author`/`homepage`/`attribution`) declarations | `references/manifest.md` |
 | Java backend: `PluginContext`, `DocStore`, `SchemaStore`, `PluginBlobs`, aggregates, scheduling, extension points | `references/backend.md` |
-| Web Component: `ctx` surface, `ctx.schema` queries, `ctx.blobs` uploads, `ctx.links`, `route.navigate`, doc-store HTTP calls, CSP, theme, i18n | `references/frontend.md` |
+| Web Component: `ctx` surface, `ctx.schema` queries, `ctx.blobs` uploads, `ctx.links`, `route.navigate`, doc-store HTTP calls, CSP, theme, `--mc-icon-*`, i18n | `references/frontend.md` |
 | Tests (required by the BRIEF's DoD) | `references/testing.md` |
-| Browser + live-instance setup, viewport matrix, data-safety rules, the build→install→restart loop | `references/dev-environment.md` |
+| Browser + live-instance setup, viewport matrix, data-safety rules, the build→install→restart loop, installing a released plugin by spec | `references/dev-environment.md` |
 | Moving an existing plugin from 0.7.x to 0.8.0 | `references/migrating.md` |
 
 Live reference implementation: **`mosaicast-plugin-sample` v2.9.0** (on SDK 0.8.0). It declares a `blobs`

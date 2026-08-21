@@ -106,6 +106,9 @@ Three things only a live host can prove, because the test kit deliberately canno
 
 ## 5. The loop
 
+While developing, the manual copy is still the right tool — it is your own unreleased build, so there is no
+tag to install by:
+
 ```bash
 ./build.sh
 rm -rf "$MOSAICAST_PLUGINS_DIR/<id>" && mkdir -p "$MOSAICAST_PLUGINS_DIR/<id>"
@@ -115,3 +118,47 @@ cp -r dist/* "$MOSAICAST_PLUGINS_DIR/<id>/"
 
 After every restart, check the **admin log viewer** first. A rejected manifest disables only your plugin,
 quietly — the page just will not have your tile on it, which looks exactly like a render bug and is not one.
+
+## 6. Installing a *released* plugin by spec (core 0.6.15)
+
+Hand-copying `dist/` still works and always will — it is the only option for your own unreleased build (§5
+above). For a plugin that already has a GitHub release, there is now a second path that needs no filesystem
+access to the host at all:
+
+```bash
+scripts/install-plugin.sh Mosaicast/mosaicast-plugin-wiki@v1.0.0#sha256:abc123…   # on a host checkout
+```
+```yaml
+MOSAICAST_PLUGINS: "Mosaicast/mosaicast-plugin-wiki@v1.0.0#sha256:abc123…"        # in a container, resolved
+                                                                                    # before the JVM starts
+```
+
+Also accepts a bare `owner/repo` (latest release), a tarball URL, or a local `.tgz` — each with an optional
+`#sha256:…`. **No registry**: GitHub Releases are the index, reached through the plain
+`releases/…/download/plugin.tgz` redirect — no API call, no token, no JSON parsing.
+
+Worth carrying into any conversation about installing or releasing a plugin:
+
+- **Plugins are read once, at startup — this has not changed.** The container resolves `MOSAICAST_PLUGINS`
+  *before* the JVM boots for exactly that reason; anything arriving after is invisible until the next
+  restart. The restart requirement in §2 above is not superseded by any of this.
+- **The installed folder name comes from the manifest's own `id`, never the repo name.** A folder that
+  disagrees with its manifest is rejected at load regardless of how it got there.
+- **The container path resolves prebuilt tarballs only** — no git, no JDK in the runtime image. Clone-and-
+  build is a developer-machine path (`scripts/install-plugin.sh` supports it there; the container does not).
+- **Pin a tag *and* a checksum.** A plugin is trusted, in-process, unsandboxed code — this doesn't change
+  that trust model, but making installation one env var away means the *documented default* should be the
+  auditable form, not the shortest one. An unpinned `owner/repo` runs whatever that repo publishes next.
+- Restarts are **idempotent**: an already-installed spec is recognised without re-downloading, because each
+  install records the spec that produced it.
+
+## 7. Publishing a plugin so others can install it this way
+
+`dev/templates/release-plugin.yml` in `mosaicast-core` is a workflow to copy into a plugin repo as
+`.github/workflows/release.yml`. On a published GitHub Release it runs `build.sh`, attaches a `plugin.tgz`
+asset, refuses a tag that disagrees with the manifest's `version`, and appends the tarball's SHA-256 to the
+release notes — an operator installing it has a pinned spec to copy, not a checksum to compute themselves.
+
+**The asset name `plugin.tgz` is load-bearing, not a style choice.** The installer resolves `owner/repo@tag`
+straight to `releases/download/<tag>/plugin.tgz` — a fixed URL, no API call. Rename the asset and every
+`owner/repo` install for that plugin breaks.

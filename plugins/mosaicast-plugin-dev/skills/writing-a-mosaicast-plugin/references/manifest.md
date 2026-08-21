@@ -15,6 +15,10 @@ rejected.
   "version": "2.9.0",
   "platformApi": "0.8.0",
   "name": "Sample",
+  "license": "Apache-2.0",
+  "author": "The Mosaicast Authors",
+  "homepage": "https://github.com/Mosaicast/mosaicast-plugin-sample",
+  "attribution": "https://example.org/data-source",
   "backend":  { "basePath": "/api/plugins/sample", "extensions": ["dev.mosaicast.plugin.sample.SamplePlugin"] },
   "frontend": { "entry": "sample.es.js", "elements": ["sample-highlight", "sample-highlight-card"] },
   "slots": [
@@ -212,6 +216,34 @@ and refuses every upload):
 Access uses the `data` floors: reads take `readableBy`, writes take `writableBy`. `backendOwned` does not
 apply. Purge takes a plugin's files with it, matched on the namespace exactly.
 
+## `license` / `author` / `homepage` / `attribution` — credit (core 0.6.15)
+
+```json
+"license": "AGPL-3.0-or-later",
+"author": "The Mosaicast Authors",
+"homepage": "https://github.com/Mosaicast/mosaicast-plugin-bingo",
+"attribution": "https://example.org/data-source"
+```
+
+Four optional strings, surfaced through the anonymous `GET /api/plugins/manifest` and shown on the host's
+public **`/about`** page — what an install runs, and under what terms, is not privileged information.
+
+**`attribution` is not a duplicate of `homepage`.** "Where this lives" and "who deserves credit for it" are
+different links: a plugin that borrows data, artwork or an upstream library can credit the source without
+giving up its own page.
+
+**Never validated, and never a rejection reason.** `license` is not checked against the SPDX list, none of
+the four is checked for shape, and a plugin written before they existed keeps loading exactly as before —
+credit is not a correctness concern. Add them freely; there is nothing here to get wrong.
+
+**Adding these does not need a `platformApi` bump**, and bumping it *for* this change would be actively
+harmful. Unknown manifest fields are ignored by the host and there is no manifest type in the SDK at all, so
+this is additive in both directions — a manifest declaring these four loads on an older host (it just ignores
+them), and a manifest without them loads on a newer one (the About page's plugin card renders without that
+plugin's credit). `platformApi` compatibility, by contrast, is an **exact `major.minor`** match — bumping it
+here would reject every already-installed plugin until each one re-released, for a change that needed no
+contract move at all.
+
 ## `config`
 
 ```json
@@ -257,6 +289,7 @@ A **service-level** declaration. The legacy `{ categories, externalSources }` sh
 `data floor '%s' is not one of […]` · `data.writableBy may not be 'anonymous'` ·
 `data.backendOwned entry '%s' is not usable` · `blobs limits must be positive; got %s` ·
 `blobs.mimeTypes is present but names no type` · `blobs.mimeTypes may not include image/svg+xml` ·
+`license`/`author`/`homepage`/`attribution` are **never** a rejection reason — see above — ·
 `config field '%s' has unknown type/unknown editableBy/default
 does not match declared type` · `consent must declare services[]` (plus missing `name`, missing `category`,
 bad category token, blank or scheme-less host, bad wildcard, unparsable origin, storage item without a name,
