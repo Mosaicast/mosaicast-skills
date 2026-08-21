@@ -304,6 +304,36 @@ bg→--mc-bg          surface→--mc-surface   text→--mc-text            textM
 accent→--mc-accent  accentContrast→--mc-accent-contrast              accent2→--mc-accent-2   border→--mc-border
 ```
 
+### `--mc-icon-*` — the shell's icon set (core 0.6.15)
+
+A second published token family, same channel as the colour tokens above: custom properties that inherit
+across the shadow boundary, so a Web Component uses the shell's icons with **no SDK import, no
+`platformApi` bump and no version skew** — a plugin built against an older SDK picks up an icon added to
+core the day it lands.
+
+**Consume as a mask, never as a background image**, or the icon ignores your theme:
+
+```css
+/* Right — the icon takes YOUR colour and re-themes with everything else */
+.icon {
+  mask-image: var(--mc-icon-close);
+  mask-size: contain;
+  mask-repeat: no-repeat;
+  background: currentColor;
+  width: 1em;
+  height: 1em;
+}
+
+/* Wrong — background-image renders the icon in its own baked colour, ignoring light/dark and your accent */
+.icon { background-image: var(--mc-icon-close); }
+```
+
+The published set is **larger than what core itself draws**, on purpose: a plugin builds against a
+*released* core, so an icon that is not already published is one its author cannot add without waiting for
+a core release. Coverage includes charts/percentages, documents/journal/history, board/trophy/dice, and
+`choice-single`/`choice-multi` for poll-style UIs. Published names are a contract like the colour tokens —
+**add freely, rename never**.
+
 ## i18n and deep links
 
 ```ts
