@@ -8,9 +8,9 @@ description: Use when cutting a release of a Mosaicast plugin, bumping its versi
 Two versions are in play and they are not the same thing:
 
 - **the plugin's own version** — SemVer, yours to choose, lives in three files
-- **`platformApi`** — the host contract the backend compiled against, currently **0.8.0**, matched by core on
-  exact `major.minor` (patch is free to the host — but keep one string across all four anchors, because the
-  contract test and the CI drift guard compare them literally)
+- **`platformApi`** — the host contract the backend compiled against, currently **0.11.0** (core **0.6.23**
+  hosts it), matched by core on exact `major.minor` (patch is free to the host — but keep one string across
+  all four anchors, because the contract test and the CI drift guard compare them literally)
 
 Getting either out of sync produces a plugin that builds cleanly and is rejected at load, quietly, with the
 reason only in the admin log viewer.
@@ -71,7 +71,7 @@ The SDK artifacts live on GitHub Packages, which **requires authentication even 
 in CI. Without it the backend build fails to resolve `dev.mosaicast:plugin-api` with a 401 that reads like
 the artifact does not exist.
 
-**0.8.0 is published** on both npm and GitHub Packages (`v0.8.0`), so no workaround is needed today. If a
+**0.11.0 is published** on both npm and GitHub Packages (`v0.11.0`), so no workaround is needed today. If a
 future SDK version you need is on master but **untagged**, resolve it from a local checkout instead — `mavenLocal()` after `./gradlew publishToMavenLocal` in the SDK repo, or
 `includeBuild("../mosaicast-plugin-sdk")`. Do not ship a release built that way without confirming the
 artifact is public first, or nobody else can rebuild it.
@@ -93,7 +93,8 @@ The folder name **must equal the manifest `id`**. Then verify in this order — 
 3. **The slots**: does each declared slot actually render? Remember `placement: "admin"` renders nowhere and
    `scope: "season"` matches no region — both validate happily.
 4. **`/p/<id>/`**: resolves only if the plugin is active *and* declares a `{ scope: "site", placement: "page" }`
-   slot; otherwise a real 404.
+   slot; otherwise a real 404. If you declared `nav[]`, check the host's menu shows your entries (or, with no
+   `nav[]` at all, one default entry named after the manifest's `name`).
 5. **Config**: values appear in the generated admin form; a field the caller may not edit is redacted from
    the read-back too.
 6. **Narrow widths and dark theme**: check the tile at a phone width (375px) and in both themes before
@@ -111,6 +112,9 @@ The folder name **must equal the manifest `id`**. Then verify in this order — 
 | same | `storage: "schema"` as a bare string, or a schema block with no entities |
 | same | unknown slot placement, `data.writableBy: "anonymous"`, a consent category containing a dot, a host without a scheme |
 | same | a `blobs` block with a non-positive limit, an empty `mimeTypes` list, or `image/svg+xml` in it |
+| same | a `tags` block with both `readsVocabulary` and `writesEpisodes` false, or an `external` block with empty `kinds` — both "asks for nothing" refusals |
+| same | an `external.kinds` entry that is not `"translation"` (the only kind today), or `nav[]` entries with no `page` slot, no `label`, a `../`-climbing `path`, or two entries normalising to the same `path` |
+| `nav[]` loads but core ignores your entry's role floor | you wrote `"role"` — core's field is `"visibleTo"`, same as a slot; the SDK's TS type disagrees with core here |
 | uploads all fail with 415 | the install's `allowed-mime-types` does not include what you declared — the lists are intersected |
 | uploads fail with 413 at an unexpected size | an admin's per-plugin grant replaced your manifest's ask; read `…/blob/quota` |
 | loads, but the extension never runs | missing `annotationProcessor("org.pf4j:pf4j:…")`, so no extension index was generated |

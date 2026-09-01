@@ -3,20 +3,29 @@
 Implement `PluginBackend.register(PluginContext ctx)` on an `@Extension` class in package
 `dev.mosaicast.plugin.<name>.*`. Compile against the SDK only — never core — and stay Spring-free.
 
-## `PluginContext` — seven accessors, exactly
+## `PluginContext` — ten accessors, exactly
 
 ```java
 DocStore store();                                // the generic doc store
 SchemaStore schema();                            // null unless the manifest declares schema entities
 PluginBlobs blobs();                             // null unless the manifest declares a blobs block (0.8.0)
+Tags tags();                                     // null unless the manifest declares a tags block (0.9.0)
 PluginConfig config();
 FeedAccess feeds();
+Locales locales();                                // never null — the site's languages (0.10.0)
+Translation translation();                        // null unless external.kinds declares "translation" AND
+                                                   // an admin configured a provider (0.10.0; gated 0.11.0)
 org.slf4j.Logger logger();                       // already named "plugin.<pluginId>"
 void onSchedule(Duration every, Runnable task);  // ShedLock-wrapped, at most once across instances
 ```
 
 There is **no `ctx.log(...)` in Java** (that is the TypeScript context) and no route-registration API — a
 plugin does not author HTTP endpoints.
+
+**`translation()`'s gate is Java-only-half of 0.11.0's change.** Declaring `external.kinds` is the whole
+story on the backend — there is no role floor here, because `register()` and `onSchedule` have no visitor.
+`external.usedBy` governs only the browser client (`ctx.translation` in TypeScript); it is ignored for this
+accessor.
 
 `logger()` is the one to use. A logger you build yourself with `LoggerFactory.getLogger(...)` falls outside
 the `plugin.` prefix, so the host cannot attribute it to you or show it in the admin log viewer. The host
@@ -169,13 +178,91 @@ DisplaySnapshot display(String refId);     // not authoritative — the host ove
 `DisplaySnapshot(title, description, audioUrl, publishedAt, duration, imageUrl, feedImageUrl, author,
 subtitle)` plus `artwork()`, which falls back from episode image to feed image.
 
-## Optional extension points
+## `Tags` (only when the manifest declares a `tags` block)
 
-Implement zero, one or both alongside `PluginBackend` — **on the same class is fine and now correct**:
+`ctx.tags()` is `null` for a plugin declaring no `tags` block — same shape as `schema()` and `blobs()`.
 
 ```java
-Optional<OgMeta>     metaFor(String subpath);   // ShareMetadataProvider — link previews under /p/<id>/*
-List<SitemapUrl>     urls();                    // SitemapProvider — entries for sitemap.xml
+List<TagInfo> all();                                       // the whole site vocabulary, most-used first
+List<String>  episodesWith(String tag);                    // canonicalised; unknown tag → empty, not error
+List<String>  tagsOn(String episodeSlug);
+List<TagInfo> similarTo(String tag, int limit);             // co-occurrence, best first — advice, not a contract
+List<String>  subjectsWith(String tag);                     // your own plugin's subjects only
+List<String>  tagsOnSubject(String subjectKey);
+void          tagSubject(String subjectKey, String tag);    // idempotent; adds a new tag to the vocabulary
+void          untagSubject(String subjectKey, String tag);  // idempotent; removes an assignment, never the tag
+void          tagEpisode(String episodeSlug, String tag);          // needs tags.writesEpisodes
+void          untagEpisode(String episodeSlug, String tag);        // needs tags.writesEpisodes; yours only
+```
+
+```java
+record TagInfo(String tag, String label, int episodes, int subjects) {}
+```
+
+- `tagSubject`/`untagSubject` need only `tags.readsVocabulary`; `tagEpisode`/`untagEpisode` additionally need
+  `tags.writesEpisodes` and throw `UnsupportedOperationException` without it — the Java mirror of the 403 the
+  HTTP surface returns.
+- `tag` in every method accepts **any spelling**; the host canonicalises (trim, collapse whitespace,
+  casefold) and keeps the first spelling seen as the display `label`.
+- `untagEpisode` removes only **your plugin's own** assignment — one recorded with `source = plugin:<id>`. If
+  the feed or a podcaster also tagged the same episode with the same tag, it stays tagged after your call.
+- There is no `delete`/`rename` on the vocabulary itself — a plugin may never remove a shared word or another
+  writer's row; that is admin's job in the UI, not an API a plugin backend can reach.
+
+## `Locales` and `Translation` (0.10.0)
+
+`ctx.locales()` is **never `null`** — every install has at least English. `ctx.translation()` is `null`
+unless the manifest declares `external.kinds: ["translation"]` **and** an admin configured a provider
+(0.11.0 added the first half of that gate; the operator half existed since 0.10.0).
+
+```java
+List<LocaleInfo> available();              // languages the shell can render in
+List<LocaleInfo> contentLocales();         // languages content may be authored in — build editor tabs from this
+String           defaultLocale();
+boolean          isContentLocale(String code);   // the write-time check; the browser's list is only a hint
+```
+
+```java
+record LocaleInfo(String code, String nativeName, boolean isDefault) {}
+```
+
+`available()` and `contentLocales()` are genuinely different lists — a site can require content in a
+language its UI does not offer. Build a per-locale editor from `contentLocales()`, never `available()`.
+
+```java
+TranslationResult translate(TranslationRequest request) throws TranslationException;
+boolean            available();            // whether a call would even be attempted — advisory, re-check may lie
+```
+
+```java
+record TranslationRequest(String text, String from, String to, Format format) {}   // Format: TEXT | HTML
+record TranslationResult(String text, String detectedSourceLanguage, String providerId, boolean fromCache) {}
+```
+
+`TranslationException` is **checked** and carries `reason()` — `NO_PROVIDER`, `MISCONFIGURED`,
+`RATE_LIMITED`, `BUSY`, `TIMEOUT`, `PROVIDER_FAILED` — plus `retryable()` for the three worth retrying.
+Two things worth internalising:
+
+- **Markdown is neither `TEXT` nor `HTML`.** Send it as `TEXT` and expect links and code fences to come back
+  mangled — the provider does not know they are markup. Splitting markdown into translatable blocks is the
+  caller's job.
+- **Machine output is a draft.** Store it flagged and let a person confirm it before it is shown as fact —
+  the same posture core's own legal-page prefill takes.
+
+`Locales`/`Translation` never reach `USER`-partitioned data and carry no per-plugin quota; the only gate on
+either is the manifest.
+
+## Optional extension points
+
+Implement zero, one or more alongside `PluginBackend` — **on the same class is fine and now correct**:
+
+```java
+Optional<OgMeta>     metaFor(String subpath);           // ShareMetadataProvider — link previews under /p/<id>/*
+List<SitemapUrl>     urls();                            // SitemapProvider — entries for sitemap.xml
+boolean               hasRoute(String subpath);          // PageRouteProvider — real 404s (0.9.1)
+List<SearchHit>       search(String query, Role role, int limit);   // SearchProvider — site-wide search (0.9.0)
+void                  eraseUser(String userId);          // UserDataHandler — account deletion reaches you (0.9.0)
+Optional<Map<String,Object>> exportUser(String userId);  // UserDataHandler — defaulted to Optional.empty()
 ```
 
 Since core 0.6.7 the host uses PF4J's `SingletonExtensionFactory`, so **all your extension points run on the
@@ -188,8 +275,29 @@ is correct.
   empty at the plugin root.
 - `SitemapUrl(loc, lastModified)`: `lastModified` nullable. Entries are **filtered to your own namespace** —
   `loc` must equal `/p/<id>` or start with `/p/<id>/`; anything else is dropped.
-- A provider that throws is logged and skipped; it can never break a render or the sitemap. Disabling the
-  plugin removes its sitemap URLs and OG tags immediately.
+- **`PageRouteProvider.hasRoute(subpath)`** (core 0.9.1 host): the host turns `false` into a real `404` for
+  `/p/<id>/<subpath>`; `true` (the default when unimplemented) keeps serving `200` for everything, which is
+  today's soft-404 behaviour. `subpath` is received exactly as `ShareMetadataProvider.metaFor` receives it —
+  **empty at your own root**, so a lookup written purely over your own known slugs must answer `false` there
+  or 404s your landing page. Deliberately **not** a second reading of `ShareMetadataProvider`: your subtree
+  can legitimately hold views with nothing to describe (a search-result page) that still exist. It runs on a
+  request, like `SearchProvider` — keep it cheap; a throw is logged and skipped, serving `200`.
+- **`SearchProvider.search(query, role, limit)`** (core 0.9.0 host): your content contributed to
+  `/api/search?q=`, grouped by source rather than merged into one ranking — your `score` and Postgres
+  `ts_rank` are not on one scale. `role` is `null` for an anonymous caller. **This is the one extension point
+  where the host does not filter for you** — it has no model of your objects, so returning a draft page to
+  an anonymous visitor is a leak nothing else catches. Results name a `subpath` under `/p/<id>/`; the host
+  resolves the URL and drops `.`/`..` segments the same way `ctx.route.navigate` does.
+- **`UserDataHandler.eraseUser`/`exportUser`** (core 0.9.0 host): asked before an account row is dropped.
+  Erase or pseudonymise is **your call** — the host cannot make it; keep the identity link cut but the
+  contribution intact where an aggregate (a leaderboard, a vote count) must stay correct, hard-delete where
+  the content itself is the person's. **Must be idempotent** — a failed deletion is retried, and the host
+  reports a receipt (complete, plus what has not finished) rather than a bare success. `exportUser` defaults
+  to `Optional.empty()` and is called independently of erasure, for a data-export request in its own right.
+- A provider that throws is logged and skipped; it can never break a render, the sitemap, a page route or a
+  search page. Disabling the plugin removes its sitemap URLs and OG tags immediately, and — because
+  `UserDataHandler` is asked whenever a plugin has ever stored anything, not only while it is active — a
+  switched-off plugin still owes any outstanding erasure once it is switched back on.
 
 ## Jackson 3
 

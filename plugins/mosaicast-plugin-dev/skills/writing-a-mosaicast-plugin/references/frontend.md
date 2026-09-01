@@ -24,43 +24,66 @@ episodes: string[]                                              // resolved, acc
 episodeLabels?: Record<string, string>                          // slug → label; may be absent or partial
 episode?: { status: 'PLANNED'|'PUBLISHED'|'WITHDRAWN' }         // see "what the host actually supplies"
 user: { id: string; role: 'admin'|'podcaster'|'fan' } | null    // null = anonymous
-api: { get/post/put/delete<T>(path, body?): Promise<T> }        // /api/plugins/<id>/*, auth attached
+api: PluginApiClient                                            // /api/plugins/<id>/*, auth attached; typed errors
+docs: DocClient                                                  // never null — typed doc-store client (0.9.0)
+feeds: FeedsClient                                               // never null — episode display snapshots (0.9.0)
+tags: TagsClient | null                                          // null unless the manifest declares `tags` (0.9.0)
 schema: SchemaClient | null                                     // null unless the manifest declares storage.schema
 blobs: BlobClient | null                                        // null unless the manifest declares a blobs block
 log(level: 'debug'|'info'|'warn'|'error', message: string): void
 consent: { has(cat), granted(), request(cat): Promise<boolean>, onChange(cb): Unsubscribe }
 filter:  { current(): FilterState; onChange(cb): Unsubscribe }  // read-only — plugins consume, never define axes
 player:  { currentTime(): number; seekTo(s): void; on(ev, cb): Unsubscribe }
-route:   { path: string; onChange(cb): Unsubscribe;             // subpath under /p/<id>/
+route:   { path: string; query: URLSearchParams; hash: string;  // subpath, query, hash under /p/<id>/ (0.9.0)
+           onChange(cb): Unsubscribe;
            navigate(subpath, { replace? }): void }              // SPA move inside your own subtree
 links:   { episode(slug, { t? }): string;                       // host URL shapes — strings, not navigation
            feed(slug, { season?, tag?, order? }): string }
-locale:  { current(): string; onChange(cb): Unsubscribe }
+locale:  { current(): string; onChange(cb): Unsubscribe;
+           available(): LocaleInfo[]; content(): LocaleInfo[] }  // UI vs. authoring languages (0.10.0)
+translation: TranslationClient | null                            // null unless declared AND configured (0.10.0/0.11.0)
 progress:{ get(episodeId): Promise<number | null> }             // core listening progress, seconds
 theme: ThemeTokens
 ```
 
 Also exported: `PLATFORM_API_VERSION`, `SELF_SCOPE_ID` (`'me'`), `DataScopeType`, `DocEntry<T>`,
 `PagedDocs<T>`, `PluginRoute`, `PluginLinks`, `SchemaClient`/`SchemaQuery`/`SchemaPredicate`/`SchemaOp`/
-`SchemaPage<T>`, `BlobClient`/`BlobInfo`/`BlobPage`/`BlobQuota`, `resolveArtwork(snapshot)`,
-`createPluginI18n`, and the documentation-only manifest types. Note there is **no** TS type for the
-manifest's `blobs` block — core validates it, and nothing in the SDK reads `plugin.json`.
+`SchemaPage<T>`, `BlobClient`/`BlobInfo`/`BlobPage`/`BlobQuota`, `DocClient`/`DocTarget`/`DOC_KEY_PATTERN`,
+`FeedsClient`/`DISPLAY_BATCH_LIMIT`, `TagsClient`/`TagInfo`, `TranslationClient`/`TranslationRequest`/
+`TranslationResult`, `LocaleInfo`, `PluginApiError`/`isPluginApiError`/`ProblemDetail`,
+`resolveArtwork(snapshot)`, `matchRoute(path, patterns)`, `iconCss`/`iconMask`, `createPluginI18n`, and the
+documentation-only manifest types (`PluginManifest`, `PluginTagsDeclaration`, `PluginExternalDeclaration`,
+`ExternalServiceKind`, `PluginNavDeclaration`, …). Note there is **no** TS type for the manifest's `blobs`
+block — core validates it, and nothing in the SDK reads `plugin.json`.
 
 ## What the host actually supplies today
 
-The type is ahead of the shell. Verified against core's `buildCtx.ts` — assume this until core says otherwise:
+Verified against core's `frontend/src/plugins/buildCtx.ts` at 0.6.23 — assume this until core says
+otherwise. **`docs`, `feeds`, `tags`, `schema`, `blobs`, `translation`, `locale.available/content` and
+`consent.has/granted/request` are real, wired implementations** — the "contract ahead of implementation" gap
+0.9.0 shipped with has closed for all of them.
 
 - **`ctx.episode` is not populated.** Never branch on `episode?.status`; if you need publication state, it is
-  not available client-side.
+  not available client-side. Still true at 0.6.23 — this is the one field the shell has never wired.
 - **`filter.current()` always returns `{}`**, and **`filter.onChange`, `player.on`, `route.onChange` and
   `locale.onChange` return no-op unsubscribes that never fire.** `consent.onChange` and `route.navigate` are
-  the live ones.
+  the live ones. This is unchanged since the 0.8.0-era skill and is worth re-checking on every bump, since
+  it is exactly the kind of thing that quietly starts working.
 - `route.path` is **not** subscribed to — the host rebuilds `ctx` when the subpath changes and re-assigns it,
   which re-runs your render (with your previous cleanup first). So read `ctx.route.path` at render time and
-  a route change reaches you; `onChange` still never fires.
+  a route change reaches you; `onChange` still never fires. `route.query`/`route.hash` are populated **only
+  on a page mount** (`/p/<id>/…`); a slot mounted in a core region has none, because its query string is the
+  shell's filter state, which is `ctx.filter`'s to expose.
 - `route.navigate` is a real router call and works (see below), except in a mount with no router above it,
   where it degrades to a no-op rather than throwing.
-- `locale.current()` is fixed for the mount, and `progress.get` reads `localStorage["mc.progress.<slug>"]`.
+- `locale.current()` is fixed for the mount; `locale.available()`/`locale.content()` come from
+  `GET /api/i18n/locales` and the admin's content-languages setting respectively — real lists, not stubs, and
+  they may legitimately disagree with your own `locales/*.json` catalogs (§12.7).
+- `ctx.translation` is non-`null` **only** when your manifest declares `external.kinds: ["translation"]`
+  **and** the site admin has selected a provider — every current install unless one was configured. The
+  shell resolves both halves into a single `hasTranslation` flag before deciding, so the two reasons for
+  `null` really are indistinguishable from inside a component, exactly as the SDK docs say.
+- `progress.get` reads `localStorage["mc.progress.<slug>"]`.
 
 Practical rule: **read state at render time**; treat the event APIs as forward compatibility. Keep taking
 their return values and returning them from cleanup — they will start firing, and a leaked subscription into
@@ -91,6 +114,170 @@ There are **no ETags, no `If-Match`, no 409 and no size cap** on the doc store �
 Two tiles editing one key will clobber each other; if that matters, partition the keys. The doc API is not
 rate-limited; `POST /api/plugins/<id>/log` is (per plugin, fixed one-minute window) and is gated by the
 **write** floor.
+
+### Typed rejections and `getOrNull` (0.9.0)
+
+Every `PluginApiClient` method rejects with a `PluginApiError` on a non-2xx response — `status` plus the
+RFC 7807 body (`problem?: { type?, title?, detail?, instance? }`), so you can finally tell *the read floor
+refused you* apart from *this key is `backendOwned`*, both 403s the contract deliberately words differently:
+
+```ts
+import { isPluginApiError } from '@mosaicast/plugin-sdk';
+
+try {
+  await ctx.api.put(`data/site/main/stats`, computed);
+} catch (e) {
+  if (isPluginApiError(e) && e.status === 403) {
+    ctx.log('warn', e.problem?.detail ?? 'refused');
+    return;
+  }
+  throw e;                                            // a real failure — do not swallow it
+}
+```
+
+Use `isPluginApiError`, never `instanceof` — the error crosses a bundle boundary from the host, so it is not
+guaranteed to share a constructor with anything in your bundle.
+
+`ctx.api.get` still rejects on a 404, which is the normal answer for a document nobody has written yet.
+**`ctx.api.getOrNull<T>(path)`** resolves `null` on a 404 instead, so the reflexive
+`.catch(() => undefined)` — which also swallows the 500, the 403 and a network failure — stops being
+necessary:
+
+```diff
+-ctx.api.get<Stats>(path).then(setStats).catch(() => setStats(undefined));
++ctx.api.getOrNull<Stats>(path).then(setStats);   // null when absent; a real failure still rejects
+```
+
+### `ctx.docs` — a typed doc-store client (0.9.0)
+
+The same endpoints `ctx.api` reaches, with path building, key validation and the `'self'`/`'site'`
+shorthands done for you. Never `null` — every plugin has a doc store.
+
+```ts
+get<T>(target: DocTarget, key: string): Promise<T | null>       // null on absence, never a rejection
+put<T>(target: DocTarget, key: string, value: T): Promise<void>
+list<T>(target: DocTarget, { prefix?, page?, size? }): Promise<PagedDocs<T>>
+remove(target: DocTarget, key: string): Promise<void>
+```
+
+`DocTarget` is a `Scope`, or one of two shorthands whose id is fixed: **`'self'`** → `data/user/me` and
+**`'site'`** → `data/site/main`. That makes the most security-relevant convention in the whole contract —
+per-user data goes in the `USER` scope, never in a key — the shortest thing to write:
+
+```ts
+await ctx.docs.put('self', `mark:${ctx.scope.id}`, marks);   // instead of building data/user/me/… by hand
+```
+
+A key failing `DOC_KEY_PATTERN` **throws synchronously at the call site**, with the pattern in the message,
+instead of costing a round trip you then read a 400 body to explain. Everything else — the floors,
+`backendOwned`, the 400 on an unknown scope, the 401 on an anonymous `user` request — is unchanged and still
+the host's to enforce; `ctx.api` remains the escape hatch for anything `ctx.docs` does not cover.
+
+### `ctx.feeds` — episode display snapshots (0.9.0)
+
+The frontend half of the Java `FeedAccess`. Never `null`, and **the one surface with no `readableBy` gate
+of its own** — it returns host data the same visitor can already read from `/api/episodes/*`; it exists so
+a plugin need not know that URL shape, the same argument `ctx.links` makes.
+
+```ts
+const cards = await ctx.feeds.displayMany(ctx.episodes.slice(0, 20));   // one request, not N
+for (const slug of ctx.episodes) {
+  const snap = cards[slug];
+  if (!snap) continue;                       // filtered out for this visitor — normal, not an error
+  render(slug, snap.title, resolveArtwork(snap));
+}
+```
+
+```ts
+display(slug: string): Promise<DisplaySnapshot | null>          // null: no snapshot, or not visible — indistinguishable
+displayMany(slugs: string[]): Promise<Record<string, DisplaySnapshot>>   // clamped at DISPLAY_BATCH_LIMIT (200), not rejected
+```
+
+**Not authoritative and worth reading live rather than copying.** The host overwrites the snapshot on every
+feed refetch — that propagation is the reason to call `ctx.feeds` per render instead of projecting it into
+your own doc store on a schedule, which is the pattern this surface exists to retire. A missing key in
+`displayMany`'s answer must be treated as "not shown to this visitor," never as a failure — it cannot be
+used to enumerate episodes `ctx.episodes` did not already hand you.
+
+### `ctx.tags` — the site's shared vocabulary (0.9.0)
+
+`null` unless the manifest declares a `tags` block, mirroring `ctx.schema`/`ctx.blobs`.
+
+```ts
+const tags = ctx.tags;
+if (!tags) return;                                                // no `tags` block declared
+
+for (const t of await tags.all()) suggest(t.label, t.tag);        // the site's real vocabulary, not a free-text box
+const href = ctx.links.feed('the-sample-cast', { tag: 'kraken' }); // and it links straight to the feed view
+await tags.tagSubject(`page:${slug}`, 'Maritime Lore');            // your namespace, your key
+```
+
+```ts
+all(): Promise<TagInfo[]>
+episodesWith(tag): Promise<string[]>                 // filtered to what the caller may see
+tagsOn(episodeSlug): Promise<string[]>
+similarTo(tag, limit): Promise<TagInfo[]>             // co-occurrence, best first — advice, not a number to compare
+subjectsWith(tag): Promise<string[]>                  // your own subjects only
+tagsOnSubject(subjectKey): Promise<string[]>
+tagSubject(subjectKey, tag): Promise<void>            // idempotent; needs only tags.readsVocabulary
+untagSubject(subjectKey, tag): Promise<void>          // idempotent; removes an assignment, never the tag itself
+tagEpisode(episodeSlug, tag): Promise<void>           // needs tags.writesEpisodes; rejects (403) without it
+untagEpisode(episodeSlug, tag): Promise<void>         // needs tags.writesEpisodes; removes only YOUR assignment
+```
+
+`TagInfo = { tag, label, episodes, subjects }` — `tag` is the host's canonical key (send any spelling, it
+converges), `label` is presentation kept from first use, `episodes` counts site-wide and `subjects` counts
+only your own plugin's — you cannot see the size of a store you cannot read.
+
+**Two writes that look alike and are not.** `tagSubject`/`untagSubject` touch only keys you invented in
+your own namespace — `data.writableBy` is the whole story. `tagEpisode`/`untagEpisode` change the shell's
+filter options *and* what core recommends beside that episode, so they need the second manifest flag and
+reject with a `PluginApiError` (403) without it. What you may never do, and the host enforces rather than
+merely discourages it: delete a tag from the vocabulary, rename one, or remove another writer's assignment
+— `untagEpisode` only ever takes back your own row, even if the feed tagged the same episode the same way.
+
+### `ctx.locale.available()` / `.content()` and `ctx.translation` (0.10.0 / 0.11.0)
+
+Two lists, deliberately different: `available()` is what the shell can **render** in — mirror it if you
+build a language switcher. `content()` is what the admin permits text to be **authored** in — build an
+editor's tabs from this one, never from `available()`, since a site can require content in a language its
+UI does not offer.
+
+```ts
+for (const l of ctx.locale.content()) addTab(l.code, l.nativeName);   // an editor's language tabs
+```
+
+`ctx.translation` is `null` for **either of two indistinguishable reasons**: your manifest does not declare
+`"external": { "kinds": ["translation"] }`, or the operator configured no provider (every site, by default).
+Check the manifest before the admin panel, and **never cache the handle** — the operator half can change
+under a running plugin, so read `ctx.translation` at the point of use:
+
+```ts
+if (ctx.translation?.available()) {
+  try {
+    const { text } = await ctx.translation.translate({ text: body, to: targetLocale });
+    render(text, { draft: true });                     // machine output is a draft — show it as one
+  } catch (e) {
+    if (isPluginApiError(e) && e.status === 403) { /* below external.usedBy */ }
+    else { /* 409 no-provider/misconfigured, 429 rate-limited, 503 busy, 504 timeout */ }
+  }
+}
+```
+
+`format` is `'text'` (default) or `'html'` — **markdown is neither**; send it as text and expect links and
+code fences to come back mangled, since a translator does not know they are markup. A non-`null` handle is
+still not permission: `translate()` 403s a visitor below `external.usedBy`, so disable your button on
+`available()` rather than letting a click fail.
+
+### `matchRoute` — the prefix matcher for page plugins (0.9.0)
+
+```ts
+import { matchRoute } from '@mosaicast/plugin-sdk';
+
+const match = matchRoute(ctx.route.path, ['', 'article/:slug', '_search/:term']);
+// whole-path match with `:param` capture; null when nothing matches — never a `startsWith` that also
+// matches "article-archive"
+```
 
 ### Per-user data
 
@@ -351,3 +538,12 @@ the route is a real 404. The subpath arrives as `ctx.route.path`, and you move b
 `ctx.route.navigate` (above). For link previews, implement
 `ShareMetadataProvider` on the backend (see `backend.md`) — the page itself is client-rendered, so OG tags
 are the only thing a crawler sees.
+
+**Every subpath under a `page` slot answers `200` until you implement `PageRouteProvider`** (backend,
+0.9.1) — a mistyped slug and a page you deleted last year both render your not-found view inside a real
+`200`. Nothing here to do on the frontend beyond keeping your not-found view honest; the backend reference
+covers the provider itself.
+
+**A `page` plugin with no `nav[]` entry gets one default menu item at its root**, labelled with the
+manifest's `name` — declare `nav` (see `manifest.md`) only once you have more than one entrance worth
+naming (a wiki's front page, a random article, a podcaster-only "new page" form).

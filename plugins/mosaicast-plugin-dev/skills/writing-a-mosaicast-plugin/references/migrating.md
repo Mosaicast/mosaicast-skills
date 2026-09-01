@@ -1,82 +1,200 @@
-# Migrating an existing plugin to 0.8.0
+# Migrating an existing plugin up to 0.11.0
 
-The SDK's own `MIGRATION.md` (in the `mosaicast-plugin-sdk` checkout) is the authoritative checklist for the
-**SDK** half — read it, it is short. This file adds the **core-side** changes it does not cover, because
-core moved too.
+The SDK's own `MIGRATION.md` (in the `mosaicast-plugin-sdk` checkout, or `v0.11.0/MIGRATION.md` on GitHub)
+is the authoritative checklist for the **SDK** half of each step — read it, it is short and version-scoped.
+This file adds two things that doc does not: the **core-side** changes each release shipped alongside it,
+and one file walking the **whole chain** for a plugin that has not moved since 0.8.0.
 
-Coming from `0.6.x`? Do the 0.7.0 migration first (the frontend schema client and `route.navigate`), then
-this.
+**You have no choice about timing on every step below.** `platformApi` matches `major.minor` **exactly** —
+the moment core runs a new minor, every plugin declaring the old one is rejected at load, reason in the
+admin log viewer. Patch releases (0.9.0 → 0.9.1) are the one exception: the manifest may stay put.
 
-## The SDK half, in brief
+Coming from `0.7.x` or earlier? Do the [0.8.0 migration](https://github.com/Mosaicast/mosaicast-plugin-sdk/blob/v0.8.0/MIGRATION.md)
+first (file storage, `ctx.links`), then start here.
 
-**A version bump, and nothing else** unless you implement `PluginContext` yourself. Everything in 0.8.0 is
-new surface: no plugin code written against 0.7.1 changes behaviour, and **no existing test double breaks**
-— `FakePluginContext`'s four-argument form still compiles and still means "no file storage".
+## The chain, in order
 
-1. `plugin.json` → `"platformApi": "0.8.0"`; `build.gradle.kts` → `plugin-api` / `plugin-testkit` `0.8.0`;
-   `package.json` → `@mosaicast/plugin-sdk` `0.8.0`. Both halves are published and tagged `v0.8.0`. You have
-   no choice about timing: the moment the host runs 0.8.x, every 0.7.x plugin is rejected at load.
-2. **If you hand-roll a `PluginContext`** (Java) rather than using `FakePluginContext`, add `blobs()` —
-   returning `null` is correct for a plugin that declares no `blobs` block. On the TS side a hand-rolled
-   `ctx` needs `blobs` and `links` too; `makeMockCtx` is the cheaper answer.
-3. **Optional: store files.** Declare a `blobs` block, then `ctx.blobs` (TS) / `ctx.blobs()` (Java) stops
-   being `null`. Store the **ref**, never the URL; surface refusals to the person who picked the file; and
-   delete what you stop pointing at, because nothing collects orphans.
-4. **Optional: replace hardcoded core URLs with `ctx.links`.** If you wrote `` `/episodes/${slug}` ``
-   anywhere, that is `ctx.links.episode(slug)` now — same string today, and the host's problem when a route
-   changes. `ctx.links.episode(slug, { t })` is the timestamp deep link.
+| Step | Manifest change required? | Compile break? | What it's for |
+|---|---|---|---|
+| 0.8.x → 0.9.0 | Yes (`platformApi`) | Yes — a hand-built `ctx` in tests | tags, `ctx.feeds`, `ctx.docs`, typed API errors, `SearchProvider`, `UserDataHandler`, `nav[]` |
+| 0.9.0 → 0.9.1 | **No** (patch) | No | `PageRouteProvider` — real 404s for unknown subpaths |
+| 0.9.x → 0.10.0 | Yes | Yes — a hand-built `ctx` in tests | `ctx.locale.available/content`, `ctx.translation` |
+| 0.10.x → 0.11.0 | Yes | **No — the trap is silent** | `external` manifest block gates `ctx.translation` |
 
-Quick checklist: `platformApi` 0.8.0 in all four places · `tsc --noEmit` clean · every `ctx.blobs` use behind
-a `null` check · refs stored, never URLs · a refusal path the UI actually shows · no hardcoded `/episodes/…`
-or `/feeds/…` left · tests green against testkit / `makeMockCtx` 0.8.0.
+Do them **in order**; do not skip to 0.11.0 and back-port the manifest fields, because 0.9.0's compile
+break and 0.10.0's `ctx.translation` addition both have to land first for the 0.11.0 step to make sense.
 
-## The core half — what changed under you
+---
 
-Core is at **0.6.14** and compiles against `plugin-api` **0.8.0** (core's app version and the SDK's are
-independent schemes). Since the 0.7.x-era skills, these are the changes a plugin author can see:
+## 0.10.x → 0.11.0: declaring what external services you use
 
-**File storage exists** (core 0.6.11, `POST /api/plugins/{id}/blob` + four more paths). Opt-in through the
-manifest `blobs` block; without it every path is a 404. The operator caps both ceilings and owns the MIME
-allow-list, and **an admin can grant per-plugin limits in the admin panel** (core 0.6.13) — a grant
-*replaces* the manifest's ask rather than being minimised with it, so `…/blob/quota` is the only honest
-source for what you actually got. Refusals are **413** (size/quota) and **415** (declared or actual type),
-with distinct problem types. SVG is never storable, and a manifest asking for it is rejected at load.
+```diff
+  // plugin.json
+- "platformApi": "0.10.0",
++ "platformApi": "0.11.0",
+```
 
-**`ctx.links.episode/feed`** (core 0.6.11) — the host's own URL shapes as plain string builders.
+```diff
+- implementation("dev.mosaicast:plugin-api:0.10.0")
++ implementation("dev.mosaicast:plugin-api:0.11.0")
+- "@mosaicast/plugin-sdk": "^0.10.0"
++ "@mosaicast/plugin-sdk": "^0.11.0"
+```
 
-**An episode link can point at a moment** (core 0.6.9): `/episodes/{slug}?t=754`, which is what
-`ctx.links.episode(slug, { t })` produces. An explicit `t` beats the listener's stored progress **without
-overwriting it** — the position is only written back once playback advances five seconds past the shared
-one. Unparsable values are dropped rather than rejected, so a mangled timestamp still opens the episode.
+**The one that will catch you: `ctx.translation` goes `null` until you declare, and nothing warns you.**
+`translation` was already `TranslationClient | null`, so the type system is silent — the handle simply
+becomes `null` at runtime and you find out because a translate button stopped working.
 
-**The shell has its own share dialog** on episodes, feed tabs and the site panel (core 0.6.12) — prepared
-destinations plus a start-at row. It makes **no consent decision** and loads no third-party script. Do not
-build a second one into a plugin tile.
+If your plugin used `ctx.translation`/`ctx.translation()` on 0.10.0, add:
 
-**Global upload size rose to 12 MB** (`spring.servlet.multipart.max-file-size`) so it clears the plugin
-ceiling, and **plugin blob writes join the upload rate-limit bucket**, matched by path shape
-(`/api/plugins/*/blob`), so ordinary doc-store writes stay out of a bucket sized for files.
+```diff
+  // plugin.json
++ "external": { "kinds": ["translation"], "usedBy": "podcaster" }
+```
 
-Still true from the 0.6.x era, worth re-checking on an older manifest:
+Nothing else changes — your existing null-check already covers the right code, now for two indistinguishable
+reasons instead of one: your manifest did not ask, or the operator configured no provider. **Unexpected
+`null`? Check the manifest before the admin panel.** `usedBy` defaults to `podcaster`; leave it unless you
+have a specific reason to widen it, and never to `anonymous` without one — it is legal but opens a metered
+API to anyone who loads the page.
 
-- **The schema store has an HTTP read surface** (core 0.6.8), gated by `data.readableBy`; `ctx.schema` is
-  `null` for a doc-store plugin. Projecting a corpus into doc keys for the UI is obsolete.
-- **`ctx.route.navigate`** is wired to the shell's router and namespace-confined host-side; a route change
-  rebuilds `ctx` and re-runs your render, while `route.onChange` stays an inert no-op.
-- **Extension points run on the instance `register(ctx)` ran on** (core 0.6.7). Delete any `static ctx`
-  workaround in a `ShareMetadataProvider` / `SitemapProvider`.
-- **A deep link needs a `page` slot**; **`placement: "admin"` renders nowhere**; **read floors are not
-  inferred from slots** — an anonymous display slot plus no `data` block means 403 on reads, on all three
-  surfaces now.
-- **Strict media sources** (core 0.6.1, off by default) narrow `img-src`/`media-src` to feed-derived origins
-  plus your *consented* hosts. Note this is one more reason to serve images you own through `ctx.blobs`:
-  host-served blobs are same-origin, so they need no CSP host and make no consent decision.
+**Core-side:** core 0.6.23 built the validator that enforces this — `external.kinds` naming an unknown kind,
+or an empty `kinds`, is **rejected at load**; `usedBy: anonymous` loads but logs an admin-visible warning.
+`ctx.translation()` on the Java side is gated by the declared kind alone; `usedBy` is browser-only and
+ignored server-side.
 
-## After the bump
+---
+
+## 0.9.x → 0.10.0: the site's languages, and translation
+
+```diff
+  // plugin.json
+- "platformApi": "0.9.1",
++ "platformApi": "0.10.0",
+```
+
+**The one compile break:** `PluginContext` gained `translation`, and `ctx.locale` gained `available()` and
+`content()`. A hand-built `ctx` literal in a test stops compiling — `tsc --noEmit` catches it, not your test
+runner. Use `makeMockCtx()` instead of hand-building.
+
+**What you may now want:** `ctx.locale.content()` if your plugin authors anything per language — languages
+are a runtime registry an admin edits, so build editor tabs from `content()`, never `available()` (a site
+can require content in a language its UI does not offer). `ctx.translation` if you have text worth
+translating — remember **markdown is neither `'text'` nor `'html'`**, and machine output is a draft a human
+must confirm before it is shown as fact.
+
+**Core-side:** core built the locale registry (`GET /api/i18n/locales`, `MOSAICAST_LOCALES_DIR` drop-in
+catalogs merging key-by-key) and a LibreTranslate-backed translation provider behind the admin's external-
+services settings — the operator half of the 0.11.0 gate above. **Core did not implement `ctx.translation`
+before this step** — on any host older than the one hosting `platformApi 0.10.0`, the handle was always
+`null`.
+
+---
+
+## 0.9.0 → 0.9.1: real 404s for your unknown subpaths
+
+**Nothing mandatory.** A patch: `platformApi` matches `major.minor`, so a manifest declaring `0.9.0` keeps
+loading against a `0.9.1`+ host unchanged — bump the *dependency* only when you want the new interface:
+
+```diff
+- implementation("dev.mosaicast:plugin-api:0.9.0")
++ implementation("dev.mosaicast:plugin-api:0.9.1")
+```
+
+**What it adds:** every subpath under a `page` slot answers `200` today — a typo'd slug and a page deleted
+last year both render your not-found view inside a real `200 OK`, which a crawler indexes as content.
+Implement `PageRouteProvider.hasRoute(subpath)` (add the class to `backend.extensions`, no manifest
+declaration needed) and the host turns a `false` into a real `404`.
+
+```java
+public final class WikiRoutes implements PageRouteProvider {
+    @Override
+    public boolean hasRoute(String subpath) {
+        return subpath.isEmpty()                        // your own root — do not forget it
+                || subpath.startsWith("_search/")
+                || pages.exists(slugOf(subpath));
+    }
+}
+```
+
+Two traps: **the root is a route** (`subpath` is empty at `/p/<id>/`) — a lookup written purely over your
+own known slugs answers `false` there and 404s your own landing page, which is why
+`PageRouteProviderHarness` always probes it. And **do not reuse `ShareMetadataProvider`** — your subtree can
+legitimately hold views with nothing to describe (a search-result page) that still exist; `metaFor` says
+how to describe a page, `hasRoute` says whether it exists, and conflating them 404s working routes.
+
+**Core-side:** implemented in core's `PluginPageController` — absent means today's `200`-for-everything
+behaviour, so this step is purely additive and safe to skip until you want it.
+
+---
+
+## 0.8.x → 0.9.0: the release that came out of using the contract
+
+```diff
+  // plugin.json
+- "platformApi": "0.8.0",
++ "platformApi": "0.9.0",
+```
+
+```diff
+- implementation("dev.mosaicast:plugin-api:0.8.0")
++ implementation("dev.mosaicast:plugin-api:0.9.0")
+- "@mosaicast/plugin-sdk": "^0.8.0"
++ "@mosaicast/plugin-sdk": "^0.9.0"
+```
+
+Take `0.9.1` as your dependency once you are through this section (the manifest still says `0.9.0` — the
+patch floats) — see the step above.
+
+**The one compile break:** `PluginContext` gained three members (`docs`, `feeds`, `tags`) and `PluginRoute`
+gained two (`query`, `hash`). A hand-built `ctx` literal in a test stops compiling; the fix is not to add the
+members but to stop hand-building the context:
+
+```diff
+-const ctx = { scope: { type: 'site', id: 'main' }, episodes: [], user: null, /* … */ } as PluginContext;
++const ctx = makeMockCtx({ scope: { type: 'site', id: 'main' } });
+```
+
+On the Java side there is **no** break: `FakePluginContext` gained `withTags(...)` as a chaining mutator, so
+every existing constructor call still compiles.
+
+**Delete the code the SDK now owns, if you have it:**
+
+- A `declaredType(file)` helper — `blobs.upload` normalises the declared MIME type by default now.
+- A `formatTime`/`formatBytes` pair that hardcodes `.` as the decimal separator — use
+  `i18n.duration(seconds)` / `i18n.bytes(quota.usedBytes)` from `createPluginI18n`.
+- An English-shaped `n === 1 ? … : …` plural — use `i18n.plural('moments', n)` with catalog keys
+  `moments.one`/`moments.other`.
+- A hand-rolled icon-CSS file — `iconCss(['star', 'clock'])` replaces it, and fixes a real bug if your
+  fallback was `mask-image: none` (renders **solid squares** on any host missing an icon you used).
+- A `flush()` helper counting microtask hops — `flushMockApi(ctx.api)` does it for you.
+- A private doc-store path builder — `ctx.docs.put('self', key, value)` replaces
+  `` ctx.api.put(`data/user/me/${encodeURIComponent(key)}`, value) ``.
+- A projection of episode titles/artwork into your own doc store on a schedule — `ctx.feeds.displayMany(...)`
+  reads the host's snapshot live; deleting the projection usually deletes a `backendOwned` key with it.
+- A private search box — implement `SearchProvider` instead. **Read the access note first**: it is the one
+  extension point where the host does not filter for you, so a leak here is yours to prevent.
+- Personal data held in **schema columns or blobs** with no story for account deletion — implement
+  `UserDataHandler`. Core drops `USER`-scope documents itself; it has no idea which of your own columns is a
+  person.
+
+**What did not change:** `ctx.api`, `ctx.store()`, `ctx.schema`, `ctx.blobs`, `ctx.links`, `ctx.consent`,
+`ctx.route.navigate`, `ctx.player`, `ctx.progress`, `ctx.theme`, both access floors, `backendOwned`, the
+`USER`-scope exemptions, `FakePluginContext`'s existing constructors.
+
+**Core-side:** core shipped the host half of all of this in the same release wave — `ctx.feeds`/`ctx.docs`/
+`ctx.tags` are real (not stubs), site-wide search groups plugin hits by source at `/api/search?q=`, and
+account deletion now calls every installed `UserDataHandler` before dropping the row, with an open-record
+receipt rather than a bare success for the plugins that have not finished.
+
+---
+
+## After every bump
 
 ```bash
 ./gradlew build && npm ci && npm run build && npm run typecheck && ./build.sh
 ```
 
-Copy `dist/` into `$MOSAICAST_PLUGINS_DIR/<id>`, restart core, and **check the admin log viewer at startup** —
-a rejected manifest disables only your plugin, quietly, with its reason there.
+Copy `dist/` into `$MOSAICAST_PLUGINS_DIR/<id>`, restart core, and **check the admin log viewer at
+startup** — a rejected manifest disables only your plugin, quietly, with its reason there. A `platformApi`
+minor mismatch is the single most common reason a plugin is silently absent from the admin list.

@@ -1,6 +1,6 @@
 ---
 name: writing-a-mosaicast-plugin
-description: Use when creating or modifying a Mosaicast plugin (any mosaicast-plugin-* repo or the plugin-sample). Covers the plugin.json manifest (slots and placements, the page slot behind /p/<id>/*, data access floors, backendOwned keys, consent services, doc vs schema storage, the blobs file-storage block, the license/author/homepage/attribution credit fields), the backend PluginBackend/PluginContext contract, per-user data in the USER scope, the frontend Web Component via the SDK ctx (ctx.schema reads, ctx.blobs uploads, ctx.links, ctx.route.navigate) and theme tokens including the --mc-icon-* icon set, testing against the SDK test kit, and installing a plugin by spec (owner/repo@tag#sha256). Trigger whenever writing the manifest, adding a slot, wiring ctx, storing per-user data, uploading or serving files, linking to core pages, querying schema tables from the frontend, navigating inside a page plugin, declaring backend-owned or schema storage, styling a plugin tile's icons, crediting a plugin's license or data source, bumping platformApi, installing or releasing a plugin, or building a plugin's backend or frontend.
+description: Use when creating or modifying a Mosaicast plugin (any mosaicast-plugin-* repo or the plugin-sample). Covers the plugin.json manifest (slots and placements, the page slot behind /p/<id>/*, data access floors, backendOwned keys, consent services, doc vs schema storage, the blobs file-storage block, the tags vocabulary block, the external-services block, nav entrances into the host menu, the license/author/homepage/attribution credit fields), the backend PluginBackend/PluginContext contract and its optional extension points (ShareMetadataProvider, SitemapProvider, PageRouteProvider, SearchProvider, UserDataHandler), per-user data in the USER scope, the frontend Web Component via the SDK ctx (ctx.docs, ctx.feeds, ctx.tags, ctx.schema reads, ctx.blobs uploads, ctx.links, ctx.locale.available/content, ctx.translation, ctx.route.navigate, typed ctx.api errors) and theme tokens including the --mc-icon-* icon set, testing against the SDK test kit, and installing a plugin by spec (owner/repo@tag#sha256). Trigger whenever writing the manifest, adding a slot, wiring ctx, storing per-user data, uploading or serving files, linking to core pages, querying schema tables from the frontend, reading or writing the shared tag vocabulary, contributing to site search, handling account deletion/export, real 404s for a page plugin's unknown subpaths, declaring external-service (translation) use, adding a nav entrance, navigating inside a page plugin, declaring backend-owned or schema storage, styling a plugin tile's icons, crediting a plugin's license or data source, bumping platformApi, installing or releasing a plugin, or building a plugin's backend or frontend.
 ---
 
 # Writing a Mosaicast plugin
@@ -10,28 +10,32 @@ doc and this skill disagree, see "Which docs to trust" below.
 
 ## Version pins — get these wrong and the plugin does not load
 
-Contract version is **0.8.0** (`PlatformApi.VERSION`, `PLATFORM_API_VERSION`), and core **0.6.14** hosts it.
-The host demands an **exact `major.minor`** match; patch is free. A `0.7.x` manifest is *rejected at load*,
+Contract version is **0.11.0** (`PlatformApi.VERSION`, `PLATFORM_API_VERSION`), and core **0.6.23** hosts it.
+The host demands an **exact `major.minor`** match; patch is free. A `0.10.x` manifest is *rejected at load*,
 not warned about.
 
 ```json5
-"platformApi": "0.8.0"                                  // plugin.json
+"platformApi": "0.11.0"                                 // plugin.json
 ```
 ```kotlin
-compileOnly("dev.mosaicast:plugin-api:0.8.0")           // backend/build.gradle.kts
-compileOnly("org.pf4j:pf4j:3.12.0")
-annotationProcessor("org.pf4j:pf4j:3.12.0")             // mandatory: generates the @Extension index
-testImplementation("dev.mosaicast:plugin-testkit:0.8.0")
+compileOnly("dev.mosaicast:plugin-api:0.11.0")          // backend/build.gradle.kts
+compileOnly("org.pf4j:pf4j:3.15.1")
+annotationProcessor("org.pf4j:pf4j:3.15.1")             // mandatory: generates the @Extension index
+testImplementation("dev.mosaicast:plugin-testkit:0.11.0")
 ```
 ```json5
-"@mosaicast/plugin-sdk": "0.8.0"                        // frontend/package.json
+"@mosaicast/plugin-sdk": "0.11.0"                       // frontend/package.json
 ```
 
-Both halves of `0.8.0` are published and tagged `v0.8.0` (npm, and GitHub Packages for the Java artifacts) —
-no `mavenLocal()` workaround needed. Maven is GitHub Packages
+Both halves of `0.11.0` are published and tagged `v0.11.0` (npm, and GitHub Packages for the Java artifacts)
+— no `mavenLocal()` workaround needed. Maven is GitHub Packages
 (`https://maven.pkg.github.com/Mosaicast/mosaicast-plugin-sdk`), which needs a PAT with `read:packages`
 **even for public reads**. Jackson is **3.2.1** (`tools.jackson.*`), not `com.fasterxml`. **Pin the same
 string in all four places** — the CI drift guard and the manifest contract test both compare them.
+
+Coming from an older pin? `references/migrating.md` walks 0.8.0 → 0.9.0 → 0.9.1 → 0.10.0 → 0.11.0 in order —
+read it top to bottom rather than jumping straight to 0.11.0, since 0.9.0's compile break and 0.10.0's silent
+`ctx.translation` gate both still apply on the way up.
 
 To re-check the pin yourself:
 `grep -n 'VERSION = ' mosaicast-plugin-sdk/plugin-api/src/main/java/dev/mosaicast/plugin/api/PlatformApi.java`
@@ -68,6 +72,32 @@ To re-check the pin yourself:
 11. **`license`/`author`/`homepage`/`attribution` need no `platformApi` bump — and bumping it for them is
     actively harmful.** They are unvalidated manifest fields; `platformApi` compatibility is an exact
     `major.minor` match, so a bump for a non-breaking field change would reject every installed plugin.
+12. **Declaring `tags` is two separate capabilities, not one.** `readsVocabulary` lets you read the site's
+    shared vocabulary and tag your own subjects; `writesEpisodes` additionally lets you tag *episodes*,
+    which changes the shell's filter options and what core recommends beside that episode. A block asking
+    for neither is rejected at load — omit the block instead. You may never delete a tag, rename one, or
+    remove another writer's assignment (the feed's included) — only your own.
+13. **`ctx.translation` has two independent reasons to be `null`, and they are deliberately
+    indistinguishable.** Your manifest did not declare `external.kinds: ["translation"]`, *or* the operator
+    configured no provider (every site, by default). Check the manifest before the admin panel, and never
+    cache the handle — read `ctx.translation` at the point of use, since the operator half can change under
+    a running plugin. A non-`null` handle is still not permission: `translate()` 403s below
+    `external.usedBy` (default `podcaster`).
+14. **A `page` plugin's unknown subpaths answer `200` until you implement `PageRouteProvider`.** Absent
+    means today's behaviour — every subpath under your plugin renders your not-found view inside a `200`,
+    which a crawler indexes as real content. `hasRoute("")` (the empty string) is your own root; a lookup
+    written over your own slugs alone answers `false` there and 404s your landing page.
+15. **`SearchProvider` is the one place the host does not filter for you.** It has no model of your
+    objects, so returning a draft page to an anonymous visitor (`role == null`) is a leak nothing else
+    catches — the access check is yours to write, and `SearchProviderHarness` calls you once per role,
+    anonymous included, so the test is one line.
+16. **`nav[]`'s JSON key is `visibleTo`, not `role`.** The SDK's `PluginNavDeclaration` TS type (documentation
+    only) names it `role`; core's actual manifest field — the one the host parses — is `visibleTo`, same as
+    a slot. Write `visibleTo` in `plugin.json`; core wins over the SDK type on any disagreement.
+17. **Prefer `ctx.docs`/`ctx.feeds`/`getOrNull` over hand-built paths and swallowed 404s.** `ctx.docs.get`
+    resolves to `null` on 404 instead of rejecting; `ctx.api.getOrNull` does the same for the raw client.
+    `ctx.feeds.display`/`displayMany` replace a scheduled ingest that copies episode snapshots into your own
+    doc store — read them live, they are not authoritative and the host overwrites them on every refetch.
 
 ## Before you build: ask for a browser and an instance
 
@@ -116,24 +146,36 @@ Five distinct URL namespaces, don't conflate them:
 | Web Component: `ctx` surface, `ctx.schema` queries, `ctx.blobs` uploads, `ctx.links`, `route.navigate`, doc-store HTTP calls, CSP, theme, `--mc-icon-*`, i18n | `references/frontend.md` |
 | Tests (required by the BRIEF's DoD) | `references/testing.md` |
 | Browser + live-instance setup, viewport matrix, data-safety rules, the build→install→restart loop, installing a released plugin by spec | `references/dev-environment.md` |
-| Moving an existing plugin from 0.7.x to 0.8.0 | `references/migrating.md` |
+| Moving an existing plugin from 0.8.x up to 0.11.0 | `references/migrating.md` |
 
-Live reference implementation: **`mosaicast-plugin-sample` v2.9.0** (on SDK 0.8.0). It declares a `blobs`
-block and exercises `ctx.blobs` (upload, `urlFor`, the `null` degrade path) and `ctx.links.episode/feed`; its
-`README.md` carries the worked `curl` forgery that motivates `backendOwned`, its page slot uses
-`ctx.route.navigate`, and its `docs/BRIEF.md` pattern is the definition of done for every plugin repo.
+Live reference implementation: **`mosaicast-plugin-sample` v2.10.0**, still on **SDK 0.8.0** as of this
+writing — it predates `tags`/`feeds`/`docs`/`external`/`nav` and is not a source for those. It declares a
+`blobs` block and exercises `ctx.blobs` (upload, `urlFor`, the `null` degrade path) and
+`ctx.links.episode/feed`; its `README.md` carries the worked `curl` forgery that motivates `backendOwned`,
+its page slot uses `ctx.route.navigate`, and its `docs/BRIEF.md` pattern is the definition of done for every
+plugin repo. Re-check its tag before relying on a version number quoted here — it moves independently of the
+SDK and has lagged it before.
 
 ## Which docs to trust
 
 - **SDK `README.md` / `CHANGELOG.md` / `MIGRATION.md` and the Javadoc/TSDoc** — accurate, take signatures from here.
-- **`docs/ARCHITECTURE.md`** — much fresher than it used to be: correct on the `data` block and
-  `backendOwned` (§7.2), the `USER` scope, `queryAcrossUsers` and the extension points (§7.4), the schema
-  provider **and its read HTTP surface** (§7.6), the `blobs` manifest block and file storage (§7.2, §11,
-  §11.1), and purge (§7.8). §7.5's `ctx` block now lists `schema`, `blobs`, `links` and `route.navigate`.
+- **`docs/ARCHITECTURE.md`** — current through the `external` block and §16's plugin-declaration paragraph
+  (0.11.0). Correct on the `data` block and `backendOwned` (§7.2), the `tags` and `external` blocks and their
+  refusal shapes (§7.2), `nav[]` and the default entry a page plugin gets without one (§7.2 — but see the
+  `role`/`visibleTo` drift below), the `USER` scope, `queryAcrossUsers` and every extension point including
+  `SearchProvider`, `PageRouteProvider` and `UserDataHandler` (§7.4), the schema provider **and its read HTTP
+  surface** (§7.6), the `blobs` manifest block and file storage (§7.2, §11, §11.1), site-wide search (§6.7),
+  account deletion reaching plugin data (§12.8), languages as a runtime registry and host-mediated
+  translation (§12.7, §16), and purge (§7.8). §7.5's `ctx` block lists `docs`, `feeds`, `tags`, `schema`,
+  `blobs`, `links`, `locale.available/content`, `translation` and `route.navigate`.
   Still stale on: the `"platformApi": "1.x"` example (that string does not even parse), the example's
   `placement: "admin"` slot (accepted by validation, rendered nowhere), §7.3's region list (missing `page`),
   §7.5's `ctx` block (still missing `episodeLabels`, `log`, `consent.granted/request` and the `Unsubscribe`
   returns), and a doc-store "indexable fields" escape hatch that was never implemented.
+- **The SDK's `PluginNavDeclaration` TS type disagrees with core on one field name.** The TS type
+  (documentation-only, like the rest of `PluginManifest`) calls it `role`; core's `NavEntry` record — what
+  actually parses `plugin.json` — calls it `visibleTo`. Write `visibleTo`; core is authoritative on the
+  manifest, full stop.
 - **`mosaicast-plugin-bingo` / `-stats` / `-wiki`** — bootstrap-only repos carrying a **pre-0.4.0**
   `ARCHITECTURE.md` copy and BRIEFs that specify the legacy consent shape and the per-user-key IDOR
   (`card:fan:{userId}`). Treat their docs as untrusted; the SDK and the sample win.

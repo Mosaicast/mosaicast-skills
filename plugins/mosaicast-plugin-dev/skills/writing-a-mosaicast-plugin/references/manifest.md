@@ -13,7 +13,7 @@ rejected.
 {
   "id": "sample",
   "version": "2.9.0",
-  "platformApi": "0.8.0",
+  "platformApi": "0.11.0",
   "name": "Sample",
   "license": "Apache-2.0",
   "author": "The Mosaicast Authors",
@@ -22,11 +22,15 @@ rejected.
   "backend":  { "basePath": "/api/plugins/sample", "extensions": ["dev.mosaicast.plugin.sample.SamplePlugin"] },
   "frontend": { "entry": "sample.es.js", "elements": ["sample-highlight", "sample-highlight-card"] },
   "slots": [
-    { "scope": "episode", "element": "sample-highlight-card", "placement": "card", "visibleTo": "anonymous", "order": 100 }
+    { "scope": "episode", "element": "sample-highlight-card", "placement": "card", "visibleTo": "anonymous", "order": 100 },
+    { "scope": "site", "element": "sample-highlight", "placement": "page", "visibleTo": "anonymous" }
   ],
+  "nav": [{ "path": "", "label": "Sample", "icon": "star" }],
   "storage": "doc",
   "data":   { "readableBy": "anonymous", "writableBy": "podcaster", "backendOwned": ["stats", "agg:*"] },
   "blobs":  { "maxFileBytes": 5242880, "quotaBytes": 268435456, "mimeTypes": ["image/png", "image/jpeg"] },
+  "tags":   { "readsVocabulary": true, "writesEpisodes": false },
+  "external": { "kinds": ["translation"], "usedBy": "podcaster" },
   "config": { "refreshIntervalMinutes": { "type": "number", "default": 30, "editableBy": "podcaster" } },
   "consent": { "services": [] }
 }
@@ -38,9 +42,9 @@ rejected.
 ## `platformApi`
 
 Exact `major.minor` match against the host's `PlatformApi.VERSION`; patch is free. Pre-1.0 the *minor*
-carries breaking changes, so `0.7.1` against a 0.8.x host is rejected, and `"1.x"` fails to parse at all.
-`"0.8"` and `"0.8.0"` both pass against a 0.8.x host — but keep the string identical to the SDK version your
-code builds against, because the contract test and the CI drift guard compare them literally.
+carries breaking changes, so `0.10.x` against a 0.11.x host is rejected, and `"1.x"` fails to parse at all.
+`"0.11"` and `"0.11.0"` both pass against a 0.11.x host — but keep the string identical to the SDK version
+your code builds against, because the contract test and the CI drift guard compare them literally.
 
 ## `slots[]`
 
@@ -88,11 +92,14 @@ needs a signed-in user to belong to). Defaults when the block or a field is abse
 So a plugin with an anonymous display slot and no `data` block **403s on reads**; if the data really is
 public, say `"readableBy": "anonymous"` explicitly.
 
-One floor pair, **three** surfaces: `readableBy` also governs the schema read API
-(`/api/plugins/<id>/schema/*`) and blob reads (`…/blob`, `…/blob/{ref}`, `…/blob/quota`); `writableBy`
-governs blob uploads and deletes. There are no schema writes over HTTP, so `writableBy` has no schema
-counterpart, and `backendOwned` does not reach the blob surface at all — it reserves *keys*, and a caller
-never names one there (a ref is a UUID the host mints per upload, so an upload cannot overwrite anything).
+One floor pair, **four** surfaces: `readableBy` also governs the schema read API
+(`/api/plugins/<id>/schema/*`), blob reads (`…/blob`, `…/blob/{ref}`, `…/blob/quota`) and every call
+through `ctx.tags` — reads and writes alike, layered under the tags block's own
+`readsVocabulary`/`writesEpisodes` gate; `writableBy` governs blob uploads/deletes and the tags writes
+alongside that same gate. There are no schema writes over HTTP, so `writableBy` has no schema counterpart,
+and `backendOwned` does not reach the blob or tags surfaces at all — neither lets a caller name an existing
+key or row belonging to someone else (a blob ref is a host-minted UUID; a tags write is scoped to your own
+subjects, or recorded with your plugin as its source).
 
 Neither floor applies to the `USER` scope in either direction: no floor makes someone else's partition
 readable, none stands between a caller and their own, and `writableBy` does not gate it (it protects the
@@ -216,6 +223,103 @@ and refuses every upload):
 Access uses the `data` floors: reads take `readableBy`, writes take `writableBy`. `backendOwned` does not
 apply. Purge takes a plugin's files with it, matched on the namespace exactly.
 
+## `tags` — the shared vocabulary (0.9.0)
+
+```json
+"tags": { "readsVocabulary": true, "writesEpisodes": false }
+```
+
+**Opt-in and declared, never derived** — the same rule `data`, `blobs` and `external` follow. Absent ⇒ no
+tag surface at all: `ctx.tags` is `null`, `PluginContext.tags()` is `null`, both endpoints 404.
+
+Two flags because the two acts are not alike:
+
+- **`readsVocabulary`** — read the site's whole tag vocabulary and tag your own subjects (`tagSubject` /
+  `untagSubject`, keyed by a subject key you invent in your own namespace). `data.writableBy` is the whole
+  authorization story for these — nothing else to declare.
+- **`writesEpisodes`** — additionally tag/untag *episodes* (`tagEpisode` / `untagEpisode`). This is a real
+  capability, not a convenience: it changes the shell's filter options and what `RelatedProvider`
+  recommends beside that episode, so an operator should be able to read it off the manifest before
+  installing, separately from the first flag.
+
+**A block declaring neither is rejected at load** — *"tags block asks for nothing (readsVocabulary and
+writesEpisodes are both false) — omit the block to declare no tag surface"* — since it would produce a
+surface that exists (`ctx.tags` non-null) and refuses every call through it.
+
+What no plugin may do, enforced rather than merely asked: delete a tag from the vocabulary (it is shared
+and outlives its last assignment), rename one (a vocabulary-wide edit, admin's job), or remove another
+writer's assignment on an episode — the feed's included. Every plugin write is recorded with
+`source = plugin:<id>`, which is what makes the last rule enforceable: `untagEpisode` only ever removes
+*your own* row.
+
+The host owns the canonical key (trim, collapse internal whitespace, casefold) and keeps the display
+`label` from first use, so `Maritime` and `maritime ` converge on one tag without lower-casing what a
+visitor reads. Send any spelling; store and compare on the canonical key the host hands back.
+
+## `external` — admin-configured third-party services (0.11.0)
+
+```json
+"external": { "kinds": ["translation"], "usedBy": "podcaster" }
+```
+
+**Opt-in and declared, never derived**, on the same terms as `blobs` and `tags`. Absent ⇒ no external
+surface at all — `ctx.translation` / `ctx.translation()` are **`null` regardless of what the operator
+configured**, which is the point: whether you declared is a static fact about your own manifest, and the
+gate is checked before the operator's provider choice is even looked at.
+
+- **`kinds`** — a list of `ExternalServiceKind` values; `"translation"` is the only member today
+  (transcription, text-to-speech and embeddings are the shapes the surface is built to take next). An
+  unknown kind is **rejected at load**, not dropped — *"external kind '%s' is not one of […]"* — because
+  within one `platformApi` the vocabulary is closed and a name nothing answers to is a typo, the same
+  reasoning `data.backendOwned` is refused under.
+- **`usedBy`** — the lowest role that may trigger a call **from this plugin's UI**. Defaults to
+  `podcaster`, matching `data.writableBy`'s floor. **Browser-side only** — `register()` and `onSchedule`
+  have no visitor and no role, so declaring the kind is the whole gate on the backend. Unlike
+  `data.writableBy`, **`anonymous` is legal here** (a self-hosted, free provider is a real case an operator
+  might want public) — but it is logged as a warning at load, because behind a metered provider it is an
+  open spending endpoint reachable by anyone who loads the page.
+- **Empty `kinds` is rejected at load** — *"external block declares no kinds — omit the block to declare no
+  external surface"* — the same "asks for nothing" refusal `tags` gets, for the same reason.
+- One floor for the **whole plugin**, not per kind — with one kind today the two are the same thing spelled
+  differently; a later per-kind floor can only *narrow* this one.
+
+A non-`null` `ctx.translation` is still not permission: the host enforces `usedBy` **at the call**, so a
+visitor below the floor holds a working-looking handle whose `translate()` rejects with **403**.
+
+## `nav` — entrances into the host's menu (0.9.0)
+
+```json
+"nav": [
+  { "path": "", "label": "Wiki" },
+  { "path": "random", "label": "Random article", "icon": "shuffle" },
+  { "path": "_new", "label": "New page", "visibleTo": "podcaster" }
+]
+```
+
+A `page` plugin owns `/p/<id>/*`, but nothing links to it — without `nav` a visitor has to already know the
+URL. A plugin declares *what* its entrances are; the host decides where and how they render in its own
+navigation chrome.
+
+- **Requires a `page` slot.** `nav` entries on a plugin with no `{ "scope": "site", "placement": "page" }`
+  slot are rejected at load — *"nav entries declared without a `page` slot — /p/\<id\> would render
+  nothing"*.
+- **Declaring none is normal and back-compatible.** A `page` plugin with no `nav` block gets **one default
+  entry at its root**, labelled with the manifest's `name` — every page plugin that predates this field
+  keeps loading and keeps a menu entry, with no re-release required.
+- **`path`** — the subpath below `/p/<id>/`; empty or absent means the plugin's root. Normalised and
+  range-checked: a leading `/` or any `.`/`..` segment is **rejected at load**, not silently rewritten —
+  *"nav path must be a plain subpath of the plugin, without a leading `/` or `..`"*. Two entries
+  normalising to the same path are a **duplicate nav path** rejection.
+- **`label`** — required; a blank one is rejected. Taken **verbatim, and never translated** — core has no
+  plugin catalogs to translate it against. Your own in-page tab bar can translate its copy of the same
+  entrance; pin `path`/`icon`/`role` between the two lists and let the label differ.
+- **`icon`** — an `--mc-icon-*` name, without the prefix. Optional and **never validated** — an unknown name
+  simply fails to render at the icon step; the host holds no icon list to check against (the palette lives
+  in generated CSS), and rejecting a whole plugin over a mistyped decoration would be disproportionate.
+- **The field is `visibleTo`, not `role`** — see "Which docs to trust" in `SKILL.md`. The SDK's
+  `PluginNavDeclaration` TS type (documentation only) calls it `role`; core's manifest parser expects
+  `visibleTo`, the same key a slot uses. Absent means anonymous.
+
 ## `license` / `author` / `homepage` / `attribution` — credit (core 0.6.15)
 
 ```json
@@ -289,7 +393,13 @@ A **service-level** declaration. The legacy `{ categories, externalSources }` sh
 `data floor '%s' is not one of […]` · `data.writableBy may not be 'anonymous'` ·
 `data.backendOwned entry '%s' is not usable` · `blobs limits must be positive; got %s` ·
 `blobs.mimeTypes is present but names no type` · `blobs.mimeTypes may not include image/svg+xml` ·
-`license`/`author`/`homepage`/`attribution` are **never** a rejection reason — see above — ·
+`tags block asks for nothing (readsVocabulary and writesEpisodes are both false)` ·
+`external block declares no kinds` · `external kind '%s' is not one of […]` ·
+`external.usedBy '%s' is not one of […]` (`external.usedBy: anonymous` loads fine but logs a warning) ·
+`nav entries declared without a page slot` · `nav entry has no label` ·
+`nav path must be a plain subpath of the plugin, without a leading / or ..` · `duplicate nav path: …` ·
+`license`/`author`/`homepage`/`attribution` are **never** a rejection reason — see above — · `icon` on a
+`nav` entry is **never** a rejection reason, it just fails to render ·
 `config field '%s' has unknown type/unknown editableBy/default
 does not match declared type` · `consent must declare services[]` (plus missing `name`, missing `category`,
 bad category token, blank or scheme-less host, bad wildcard, unparsable origin, storage item without a name,
