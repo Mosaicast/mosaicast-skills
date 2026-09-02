@@ -31,9 +31,40 @@ rebuilt plugin, so without permission to restart it, an instance is barely usefu
 
 Three shapes, best first:
 
-1. **A disposable dev stack.** If the user has a `mosaicast-core` checkout, `dev/screenshots.sh up` stands up
-   an isolated, seeded Postgres + feed server + dev-profile app (on `:8081`), and `dev/screenshots.sh down`
-   throws it away. Nothing real is at risk, so you can seed freely.
+1. **A disposable dev stack.** If the user has a `mosaicast-core` checkout, `dev/instance.sh up --plugins`
+   stands up an isolated, seeded Postgres (`:5433`) + feed server (`:8099`) + dev-profile app (`:8081`), and
+   `dev/instance.sh down` throws it all away. Nothing real is at risk, so you can seed freely — seeded with
+   only the fictional sample feed, never real dev data.
+
+   ```bash
+   dev/instance.sh up --plugins    # --plugins is not optional for plugin work — see below
+   dev/instance.sh status          # is it up, and which plugin ids actually loaded
+   dev/instance.sh logs [-f]       # the app log — last 200 lines, or follow
+   dev/instance.sh psql            # interactive shell on the fleeting database
+   dev/instance.sh down            # tear it all down
+   ```
+
+   **`--plugins` defaults *off*.** The script was renamed from `dev/screenshots.sh` — it existed for README
+   screenshots first, and with plugins loaded the sample plugin renders a demo card and placeholder artwork
+   that has no business in one. That means the default run is **useless for plugin work** unless you pass
+   `--plugins` explicitly, which loads `./plugins` (the checkout's own plugins folder — copy your `dist/`
+   there first, same as any manual install). `status` reports which ids actually loaded by asking the
+   running app, not by echoing the flag back, so it also catches a plugin that failed validation.
+
+   **`--admin` is accepted but currently does nothing.** It is parsed into a flag the script never reads —
+   `up` always logs the seeded feed in as `podcaster`, never as `admin`, whatever you pass. Don't rely on it
+   for an `/admin/*` or `/account` screenshot; log in yourself against the running app instead:
+
+   ```bash
+   curl -s -c jar.txt http://localhost:8081/api/meta >/dev/null
+   xsrf=$(awk '/XSRF-TOKEN/{print $7}' jar.txt)
+   curl -s -b jar.txt -c jar.txt -H "X-XSRF-TOKEN: $xsrf" \
+     -X POST 'http://localhost:8081/api/auth/dev-login?role=admin'
+   ```
+
+   (`dev/instance.sh` defines a reusable `login <role>` shell function doing exactly this and echoing the
+   cookie jar path — `source` the script and call it directly rather than retyping the curl pair, if you are
+   scripting more than one request.)
 2. **Their instance with test/dummy data.** Fine to restart, fine to seed — after asking (see below).
 3. **Their instance with production data.** Useful for rendering against real feeds. **Read-only** (see below).
 

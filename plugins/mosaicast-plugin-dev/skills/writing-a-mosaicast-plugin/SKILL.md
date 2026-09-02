@@ -110,7 +110,10 @@ has neither, build the plugin in full anyway and say at the end what could not b
    phone width — and that enabling a browser tool would fix that. Then carry on; do not ask again.
 2. **Ask for a Mosaicast instance** you may install into and **restart** (a restart is how core picks up a
    rebuilt plugin), and **ask whether it holds production or test data**. If the user has a `mosaicast-core`
-   checkout, `dev/screenshots.sh up` stands up a disposable seeded stack — best option, nothing real at risk.
+   checkout, `dev/instance.sh up --plugins` stands up a disposable seeded stack — best option, nothing real
+   at risk. **`--plugins` is not optional here** — plugins are opt-in and the flag defaults *off* (the
+   stack exists for README screenshots first, where the sample plugin's demo card is noise), so without it
+   your plugin never loads and the tile you are testing is silently absent.
 
 Then the data rule, which is absolute:
 
