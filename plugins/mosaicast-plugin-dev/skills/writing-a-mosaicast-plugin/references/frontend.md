@@ -58,13 +58,13 @@ block — core validates it, and nothing in the SDK reads `plugin.json`.
 
 ## What the host actually supplies today
 
-Verified against core's `frontend/src/plugins/buildCtx.ts` at 0.6.23 — assume this until core says
+Verified against core's `frontend/src/plugins/buildCtx.ts` at 0.6.24 — assume this until core says
 otherwise. **`docs`, `feeds`, `tags`, `schema`, `blobs`, `translation`, `locale.available/content` and
 `consent.has/granted/request` are real, wired implementations** — the "contract ahead of implementation" gap
 0.9.0 shipped with has closed for all of them.
 
 - **`ctx.episode` is not populated.** Never branch on `episode?.status`; if you need publication state, it is
-  not available client-side. Still true at 0.6.23 — this is the one field the shell has never wired.
+  not available client-side. Still true at 0.6.24 — this is the one field the shell has never wired.
 - **`filter.current()` always returns `{}`**, and **`filter.onChange`, `player.on`, `route.onChange` and
   `locale.onChange` return no-op unsubscribes that never fire.** `consent.onChange` and `route.navigate` are
   the live ones. This is unchanged since the 0.8.0-era skill and is worth re-checking on every bump, since

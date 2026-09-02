@@ -4,7 +4,7 @@ Required by every repo's `docs/BRIEF.md` DoD (ARCHITECTURE §13.5). No core, no 
 
 ## Backend — `dev.mosaicast.plugin.testkit.*`
 
-`testImplementation("dev.mosaicast:plugin-testkit:0.11.0")`
+`testImplementation("dev.mosaicast:plugin-testkit:0.12.0")`
 
 | Fake | Notes |
 |---|---|
@@ -21,6 +21,7 @@ Required by every repo's `docs/BRIEF.md` DoD (ARCHITECTURE §13.5). No core, no 
 | `SearchProviderHarness` (0.9.0) | `new SearchProviderHarness(provider).search(query)` calls the provider **once per `Role`, anonymous included**, and returns a `SearchResults` with `.forRole(role)`, `.titles(role)` and `.leakedToAnonymous(subpath)` — the one assertion this extension point's unusual access rule exists for. |
 | `UserDataHandlerHarness` (0.9.0) | `.eraseTwice(userId)` calls `eraseUser` twice as a retry would and fails with a clear message if the second call throws where the first succeeded; `.export(userId)` calls `exportUser` (call before `eraseTwice`, not after). |
 | `PageRouteProviderHarness` (0.9.1) | `.check(subpaths...)` always probes the **root** (`""`) whether you list it or not, records a throw as the `200` the host would still serve, and returns a `RouteAnswers` with `.serves(subpath)`, `.servesRoot()`, `.notFound()`, `.served()`, `.threw(subpath)`. |
+| `SitemapProviderHarness` (0.12.0) | `new SitemapProviderHarness(pluginId, provider).collect()` calls `urls()` once and checks it **as the host would** — an out-of-namespace `loc`/alternate, a hand-written `?lang=`, a duplicate `loc`, and the one no single entry can see: two entries in one translation group declaring different groups. Returns `SitemapEntries` with `.problems()` (empty is the assertion worth writing), `.locations()`, `.locales(loc)`, `.alternates(loc)`. A throwing provider is **not** caught — that is the original stack trace, more useful than "no sitemap entries". |
 
 ### Testing an aggregate
 
@@ -114,6 +115,12 @@ var routes = new PageRouteProviderHarness(new WikiRoutes(pages))
 assertTrue(routes.servesRoot());                 // probed even though it was never listed above
 assertEquals(List.of("glossary/tpyo"), routes.notFound());
 assertTrue(routes.failures().isEmpty());
+```
+
+```java
+var sitemap = new SitemapProviderHarness("wiki", new WikiSitemap(pages)).collect();
+assertTrue(sitemap.problems().isEmpty());                        // nothing dropped or contradicted
+assertEquals(List.of("de", "en"), sitemap.locales("/p/wiki/article"));
 ```
 
 ## Frontend — `@mosaicast/plugin-sdk/testing`
