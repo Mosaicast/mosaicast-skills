@@ -13,7 +13,7 @@ rejected.
 {
   "id": "sample",
   "version": "2.9.0",
-  "platformApi": "0.11.0",
+  "platformApi": "0.12.0",
   "name": "Sample",
   "license": "Apache-2.0",
   "author": "The Mosaicast Authors",
@@ -42,8 +42,8 @@ rejected.
 ## `platformApi`
 
 Exact `major.minor` match against the host's `PlatformApi.VERSION`; patch is free. Pre-1.0 the *minor*
-carries breaking changes, so `0.10.x` against a 0.11.x host is rejected, and `"1.x"` fails to parse at all.
-`"0.11"` and `"0.11.0"` both pass against a 0.11.x host — but keep the string identical to the SDK version
+carries breaking changes, so `0.11.x` against a 0.12.x host is rejected, and `"1.x"` fails to parse at all.
+`"0.12"` and `"0.12.0"` both pass against a 0.12.x host — but keep the string identical to the SDK version
 your code builds against, because the contract test and the CI drift guard compare them literally.
 
 ## `slots[]`

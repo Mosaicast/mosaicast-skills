@@ -270,11 +270,39 @@ same instance `register(ctx)` ran on**. The sample's old `static ctx` workaround
 built a fresh object per lookup, leaving providers with a null context) is obsolete — a plain instance field
 is correct.
 
-- `OgMeta(title, description, imageUrl)`: title and description non-null, `imageUrl` nullable and falling
+- **`OgMeta(title, description, imageUrl, locale)`** (0.12.0 — `locale` is new; the old 3-arg constructor
+  still compiles and means `locale = null`): title and description non-null, `imageUrl` nullable and falling
   back to the site default. The first provider with a non-empty answer wins; `subpath` is never null and is
   empty at the plugin root.
-- `SitemapUrl(loc, lastModified)`: `lastModified` nullable. Entries are **filtered to your own namespace** —
-  `loc` must equal `/p/<id>` or start with `/p/<id>/`; anything else is dropped.
+  - **`locale`** — the language *this title and description are written in*, or `null` for "whatever the
+    host resolved for this request" (most plugin pages — leave it out). Say it only when your page's text is
+    fixed in one language regardless of who asks — `og:locale` on that response is this value, not the
+    site's request-resolved one, and it is what the host now documents as *the language of that URL*
+    (ARCHITECTURE §6.4/§6.6), not an install-wide constant. **It is a claim about the text in this record**:
+    if you fell back to a default language because you had no translation for the requested locale, the
+    honest value is your default's code, never the code that was asked for.
+- **`SitemapUrl(loc, lastModified, alternates)`** (0.12.0 — `alternates` is new; the old 2-arg constructor
+  still compiles and means "no translation group", `Map.of()`). Entries are **filtered to your own
+  namespace** — `loc` must equal `/p/<id>` or start with `/p/<id>/`; anything else is dropped, and every path
+  inside `alternates` is confined the same way.
+  - **`alternates`** — `Map<String, String>` of locale code → path, feeding the sitemap's `hreflang`
+    alternates (ARCHITECTURE §6.6). Empty means no translation group, which is what the host already
+    assumed pre-0.12.0. **The map must contain an entry pointing at `loc` itself** — that entry is you
+    naming the language *this* page is written in, which the host has no way to know and will not guess;
+    the canonical constructor throws `IllegalArgumentException` without it. Rendering one path per language:
+    map every locale to that same `loc` (`Map.of("en", loc, "de", loc)`). A wiki with a German article at a
+    *different* path from its English one lists both paths under one shared map, on both entries.
+  - **List a language only if that page is really written in it.** Serving your default-language content to
+    a reader who asked for German is a kindness to a visitor and a lie to a crawler that is told a
+    translation exists.
+  - **The host still owns URL shape.** Alternates are bare paths, never `?lang=` appended by you — the host
+    adds the parameter, leaves the site default on the *bare* URL, points `x-default` there, and makes the
+    group reciprocal. An alternate aimed outside your own `/p/<id>/` namespace is **dropped silently**
+    (logged server-side, not rejected) rather than failing the whole entry — losing a legitimate page from
+    the sitemap over one bad alternate would be the larger punishment. If dropping leaves nothing naming
+    `loc`'s own language, the **whole group is discarded**, since a set that no longer says what its own
+    page is written in says nothing the host can honestly emit. `SitemapProviderHarness` (see `testing.md`)
+    catches this before it ships.
 - **`PageRouteProvider.hasRoute(subpath)`** (core 0.9.1 host): the host turns `false` into a real `404` for
   `/p/<id>/<subpath>`; `true` (the default when unimplemented) keeps serving `200` for everything, which is
   today's soft-404 behaviour. `subpath` is received exactly as `ShareMetadataProvider.metaFor` receives it —

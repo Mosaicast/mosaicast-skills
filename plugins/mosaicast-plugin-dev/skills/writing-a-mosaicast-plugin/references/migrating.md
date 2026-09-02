@@ -1,6 +1,6 @@
-# Migrating an existing plugin up to 0.11.0
+# Migrating an existing plugin up to 0.12.0
 
-The SDK's own `MIGRATION.md` (in the `mosaicast-plugin-sdk` checkout, or `v0.11.0/MIGRATION.md` on GitHub)
+The SDK's own `MIGRATION.md` (in the `mosaicast-plugin-sdk` checkout, or `v0.12.0/MIGRATION.md` on GitHub)
 is the authoritative checklist for the **SDK** half of each step — read it, it is short and version-scoped.
 This file adds two things that doc does not: the **core-side** changes each release shipped alongside it,
 and one file walking the **whole chain** for a plugin that has not moved since 0.8.0.
@@ -20,9 +20,58 @@ first (file storage, `ctx.links`), then start here.
 | 0.9.0 → 0.9.1 | **No** (patch) | No | `PageRouteProvider` — real 404s for unknown subpaths |
 | 0.9.x → 0.10.0 | Yes | Yes — a hand-built `ctx` in tests | `ctx.locale.available/content`, `ctx.translation` |
 | 0.10.x → 0.11.0 | Yes | **No — the trap is silent** | `external` manifest block gates `ctx.translation` |
+| 0.11.x → 0.12.0 | Yes (`platformApi`) | No — binary break only, source-compatible via overloads | `OgMeta.locale`, `SitemapUrl.alternates` — hreflang for plugin pages |
 
-Do them **in order**; do not skip to 0.11.0 and back-port the manifest fields, because 0.9.0's compile
-break and 0.10.0's `ctx.translation` addition both have to land first for the 0.11.0 step to make sense.
+Do them **in order**; do not skip to 0.12.0 and back-port the manifest fields, because 0.9.0's compile
+break and 0.10.0's `ctx.translation` addition both have to land first for the later steps to make sense.
+
+---
+
+## 0.11.x → 0.12.0: saying what language your pages are in
+
+```diff
+  // plugin.json
+- "platformApi": "0.11.0",
++ "platformApi": "0.12.0",
+```
+
+```diff
+- implementation("dev.mosaicast:plugin-api:0.11.0")
++ implementation("dev.mosaicast:plugin-api:0.12.0")
+- "@mosaicast/plugin-sdk": "^0.11.0"
++ "@mosaicast/plugin-sdk": "^0.12.0"
+```
+
+**That is the whole migration for most plugins.** `OgMeta` and `SitemapUrl` each gained a component
+(`locale`, `alternates`), which breaks *binary* compatibility — so you must rebuild — but the old shapes
+survive as real constructors, so there is nothing to edit unless you deconstruct one of these records in a
+pattern (`case OgMeta(var t, var d, var i)`) or call a canonical constructor reflectively:
+
+```java
+new OgMeta(title, description, imageUrl);       // still compiles: "whatever language the host resolved"
+new SitemapUrl(loc, lastModified);               // still compiles: no translation group, as before
+```
+
+**Nothing on the TypeScript side changed at all** — `@mosaicast/plugin-sdk` moves to `0.12.0` only because
+the two packages share one version anchor. No frontend code, hand-built `ctx`, or `makeMockCtx` call needs
+touching for this step.
+
+**What you may now want, if you implement `ShareMetadataProvider` or `SitemapProvider`:** core just shipped
+per-locale URLs (`?lang=<code>`, `hreflang` alternates in `sitemap.xml`) and had nowhere to ask a plugin
+what language its own pages are in — it deliberately emitted **no** alternates for plugin sitemap entries
+rather than assume the site's UI languages apply to content it cannot read. `OgMeta.locale` and
+`SitemapUrl.alternates` are that ask. Full detail and the honesty rules (list a language only if the page
+is really written in it) are in `references/backend.md`'s "Optional extension points" section — worth
+reading in full before you set either, since a wrong value announces a translation that is not really
+there. Verify what you built with `SitemapProviderHarness` (`references/testing.md`) before shipping —
+the host's failure mode for a bad translation group is silent (it drops the entry, or the whole group).
+
+**Core-side:** core 0.6.24 built the `?lang=` URL scheme, confines every plugin alternate to that plugin's
+own `/p/<pluginId>/` namespace exactly as it already did `loc`, drops an out-of-namespace alternate rather
+than rejecting the whole entry, and drops the whole translation group if nothing is left naming `loc`'s own
+language. `og:locale` on a plugin page is now documented as *the language of that URL*, not an install-wide
+constant (ARCHITECTURE §6.4/§6.6) — read this before assuming a fixed `og:locale` if your plugin's pages
+render in the site's active locale, since that is no longer a safe assumption to hardcode around.
 
 ---
 
