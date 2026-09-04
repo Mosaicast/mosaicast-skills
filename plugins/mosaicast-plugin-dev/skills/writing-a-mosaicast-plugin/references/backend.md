@@ -3,13 +3,15 @@
 Implement `PluginBackend.register(PluginContext ctx)` on an `@Extension` class in package
 `dev.mosaicast.plugin.<name>.*`. Compile against the SDK only — never core — and stay Spring-free.
 
-## `PluginContext` — ten accessors, exactly
+## `PluginContext` — twelve accessors, exactly
 
 ```java
 DocStore store();                                // the generic doc store
 SchemaStore schema();                            // null unless the manifest declares schema entities
 PluginBlobs blobs();                             // null unless the manifest declares a blobs block (0.8.0)
 Tags tags();                                     // null unless the manifest declares a tags block (0.9.0)
+Users users();                                    // null unless the manifest declares identity (0.13.0)
+Notifier notifier();                              // null unless the manifest declares notifications (0.14.0)
 PluginConfig config();
 FeedAccess feeds();
 Locales locales();                                // never null — the site's languages (0.10.0)
@@ -18,6 +20,10 @@ Translation translation();                        // null unless external.kinds 
 org.slf4j.Logger logger();                       // already named "plugin.<pluginId>"
 void onSchedule(Duration every, Runnable task);  // ShedLock-wrapped, at most once across instances
 ```
+
+**It's `notifier()`, not `notify()`.** ARCHITECTURE §7.4 specifies the latter, and it cannot compile:
+`Object.notify()` is `final`, so no interface may declare that name. The TypeScript half is `ctx.notify`,
+exactly as specified — the two differ because one of them has to.
 
 There is **no `ctx.log(...)` in Java** (that is the TypeScript context) and no route-registration API — a
 plugin does not author HTTP endpoints.
@@ -208,6 +214,82 @@ record TagInfo(String tag, String label, int episodes, int subjects) {}
   the feed or a podcaster also tagged the same episode with the same tag, it stays tagged after your call.
 - There is no `delete`/`rename` on the vocabulary itself — a plugin may never remove a shared word or another
   writer's row; that is admin's job in the UI, not an API a plugin backend can reach.
+
+## `Users` (only when the manifest declares an `identity` block, 0.13.0)
+
+`ctx.users()` is `null` for a plugin declaring no `identity` block — same shape and reasoning as `schema()`
+and `blobs()`. The fix for a `queryAcrossUsers` aggregate: it hands you `OwnedDocEntry(userId, …)`, UUIDs and
+nothing else, so a leaderboard built from it had no way to draw a person.
+
+```java
+List<UserRef> resolve(Collection<UUID> ids);
+```
+
+```java
+record UserRef(UUID id, String displayName, String avatarUrl, Role role) {}
+```
+
+- **Absent, not redacted, and therefore not index-aligned.** An unknown, erased or pseudonymised id is
+  simply missing from the result — no `null` element. `resolve(List.of(a, b))` may come back with one entry
+  or zero; match on `UserRef.id()`, never on position.
+- **Duplicate ids resolve once; an empty input returns an empty list rather than throwing.**
+- **It resolves, it does not enumerate.** There is no list/search method and never will be — you may ask
+  only about ids you already came by through your own scope (a doc you wrote, a row `queryAcrossUsers`
+  handed you).
+- **`avatarUrl` is finished and never null.** Always `/api/users/{id}/avatar` (ARCHITECTURE §8.7),
+  host-relative — every user has one, generated from the UUID when there's no provider picture, so there is
+  no fallback for a plugin to write.
+- **Store the UUID, resolve at render — never persist `displayName`.** A name copied into your own storage
+  survives the rename meant to shed it and the erasure meant to end it, and core cannot reach inside your
+  schema tables to fix either — it provisioned them without ever learning which column is a person. **The
+  host cannot enforce this; this sentence is the enforcement.**
+- **No role floor.** The HTTP surface behind this (`GET /api/plugins/<id>/users?ids=…`) is not gated by
+  `data.readableBy` — there is nothing here a visitor couldn't already see wherever the ids came from.
+
+## `Notifier` (only when the manifest declares a `notifications` block, 0.14.0)
+
+`ctx.notifier()` is `null` for a plugin declaring no `notifications` block. This is the **one surface that
+writes into another user's experience** — everything else a plugin touches is its own scope or the current
+visitor's — so expect to call it from `onSchedule(...)`, where the thing worth announcing usually finishes.
+
+```java
+List<UUID> send(Collection<UUID> userIds, NotifyMessage message) throws NotificationException;
+```
+
+```java
+record NotifyMessage(Map<String, String> text, String link) {
+    NotifyMessage(Map<String, String> text)  // no link
+    NotifyMessage(String english)            // English-only — the honest shape if you ship no other language
+    String textFor(String locale)            // falls back to English; what the shell does when it draws the bell
+    NotifyMessage withLink(String target)    // returns a new instance — this record is immutable
+}
+```
+
+- **`text` must contain `en`** — the canonical constructor throws `IllegalArgumentException` if it's
+  missing, blank, or if `text` is empty. Codes are trimmed and lower-cased on the way in.
+- **`send` tells you who actually got it — read the return value.** Ineligible or erased recipients are
+  left out, not rejected: one stale participant must not cost the other forty-nine theirs. A plugin that
+  ignores the return and works from a stale list notifies nobody while looking perfectly healthy.
+- **Two host-enforced bounds, neither yours to lift:**
+  - **Eligibility** — you may only reach a user id your plugin already holds `USER`-scope data for, checked
+    against the same partitions `queryAcrossUsers` spans.
+  - **Rate limits are the host's.** `NotificationException.Reason.RATE_LIMITED` (`retryable()` true) covers
+    both the per-recipient daily allowance (`perUserPerDay`: what your manifest *asks*, capped by
+    `mosaicast.plugin-notifications.hard-per-user-per-day`, default **20**; the operator's default when you
+    ask for nothing is `mosaicast.plugin-notifications.default-per-user-per-day`, default **5**) and a
+    per-call batch ceiling (`mosaicast.plugin-notifications.max-batch`, default **200** — checked against
+    the *eligible* count, so a call naming 1000 ids with 150 eligible ones passes). A scheduled sender
+    should **hold the batch for the next tick** on `RATE_LIMITED`, not drop it.
+- **`link` is validated and internal-only.** `INVALID_LINK` (not retryable) for a scheme, a leading `//`, a
+  backslash, a colon, a `..` segment, or a path under another plugin's `/p/<otherId>/`. A bare core absolute
+  path (`/episodes/kraken`) or your own `/p/<pluginId>/…` subpath (with or without the prefix) is accepted
+  and normalised to an absolute path.
+- **There is no read side.** No list, no count, no mark-as-read, no "was this opened" — and nothing here
+  reaches email, ever.
+
+```java
+enum NotificationException.Reason { RATE_LIMITED /* the only retryable() one */, INVALID_LINK, INVALID_MESSAGE }
+```
 
 ## `Locales` and `Translation` (0.10.0)
 

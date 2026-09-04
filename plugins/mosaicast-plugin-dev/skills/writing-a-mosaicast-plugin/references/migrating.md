@@ -1,6 +1,6 @@
-# Migrating an existing plugin up to 0.12.0
+# Migrating an existing plugin up to 0.14.0
 
-The SDK's own `MIGRATION.md` (in the `mosaicast-plugin-sdk` checkout, or `v0.12.0/MIGRATION.md` on GitHub)
+The SDK's own `MIGRATION.md` (in the `mosaicast-plugin-sdk` checkout, or `v0.14.0/MIGRATION.md` on GitHub)
 is the authoritative checklist for the **SDK** half of each step — read it, it is short and version-scoped.
 This file adds two things that doc does not: the **core-side** changes each release shipped alongside it,
 and one file walking the **whole chain** for a plugin that has not moved since 0.8.0.
@@ -21,9 +21,187 @@ first (file storage, `ctx.links`), then start here.
 | 0.9.x → 0.10.0 | Yes | Yes — a hand-built `ctx` in tests | `ctx.locale.available/content`, `ctx.translation` |
 | 0.10.x → 0.11.0 | Yes | **No — the trap is silent** | `external` manifest block gates `ctx.translation` |
 | 0.11.x → 0.12.0 | Yes (`platformApi`) | No — binary break only, source-compatible via overloads | `OgMeta.locale`, `SitemapUrl.alternates` — hreflang for plugin pages |
+| 0.12.x → 0.13.0 | Yes | Yes — a hand-built `ctx.user` literal in TS tests | `ctx.users`/`identity` — resolving UUIDs to a name + avatar |
+| 0.13.x → 0.14.0 | Yes (`platformApi`) | No — new surface, nothing removed | `ctx.notify`/`ctx.notifier()`/`notifications` — an in-app inbox |
 
-Do them **in order**; do not skip to 0.12.0 and back-port the manifest fields, because 0.9.0's compile
+Do them **in order**; do not skip to 0.14.0 and back-port the manifest fields, because 0.9.0's compile
 break and 0.10.0's `ctx.translation` addition both have to land first for the later steps to make sense.
+
+---
+
+## 0.13.x → 0.14.0: telling a user something happened
+
+```diff
+  // plugin.json
+- "platformApi": "0.13.0",
++ "platformApi": "0.14.0",
+```
+
+```diff
+- implementation("dev.mosaicast:plugin-api:0.13.0")
++ implementation("dev.mosaicast:plugin-api:0.14.0")
+- "@mosaicast/plugin-sdk": "^0.13.0"
++ "@mosaicast/plugin-sdk": "^0.14.0"
+```
+
+**That is the whole migration if you send nothing.** Nothing was removed or reshaped; `PluginContext`
+gained a method, but plugins *consume* that interface rather than implement it, and `FakePluginContext`
+implements the new one for you. No compile break in either language.
+
+## What the release adds, and why you might want it
+
+A plugin that finishes something a user took part in — a bingo resolving — could until now only hope they
+came back and looked:
+
+```diff
+  // plugin.json
++ "notifications": { "sends": true, "perUserPerDay": 5 },
+```
+
+```java
+// The backend, where nearly all real use lives — the thing worth announcing usually finishes on a timer.
+ctx.onSchedule(Duration.ofMinutes(15), () -> {
+    var participants = ctx.store().queryAcrossUsers("mark:").stream().map(OwnedDocEntry::userId).toList();
+    try {
+        List<UUID> told = ctx.notifier().send(participants,
+                new NotifyMessage(Map.of("en", "Bingo resolved for S02E04",
+                                          "de", "Bingo für S02E04 aufgelöst")).withLink("board/42"));
+        if (told.size() < participants.size()) ctx.logger().info("notified {}/{}", told.size(), participants.size());
+    } catch (NotificationException e) {
+        if (e.retryable()) return;   // over the cap — hold it, the next tick will do
+        throw new IllegalStateException("bad notification", e);
+    }
+});
+```
+
+```ts
+const notify = ctx.notify;
+if (!notify) return;                   // no `notifications` block in this plugin's manifest
+const told = await notify.send(participants, {
+  text: notifyText(catalogs, 'bingo.resolved', { episode: 'S02E04' }),   // your createPluginI18n catalogs
+  link: `board/${id}`,
+});
+```
+
+### The four rules that will catch you
+
+1. **You may only notify users you already hold `USER`-scope data for.** Host-enforced against the same
+   partitions `queryAcrossUsers` reads. There is no way to ask for more.
+2. **`send` tells you who actually got it — read the return value.** An ineligible or erased recipient is
+   left out rather than failing the call, so a partial send is normal and the resolved list is the only way
+   to see one. A plugin ignoring this and working from a stale list notifies nobody while looking healthy.
+3. **Send every language at once.** `NotifyMessage.text` must contain `en` — §12.7 makes it the one
+   language a site cannot switch off. Build the map with `notifyText(catalogs, key, params)` rather than by
+   hand, which is where a plugin quietly ships one locale short. The set is fixed at **send** time; a
+   language added next month shows English on messages already written.
+4. **The cap is a real branch.** Java throws checked `NotificationException` (`Reason.RATE_LIMITED`,
+   `retryable()` true); TypeScript rejects `PluginApiError` 429. A scheduled sender should **hold the batch
+   for the next tick**, not drop it. An invalid `link` (off-site, or outside your own subtree) is
+   `INVALID_LINK`/400 and will fail identically next time.
+
+There is **no read side** — you cannot list, count or mark an inbox, or learn whether anyone opened what
+you sent. Nothing here reaches email.
+
+**⚠ Do not copy ARCHITECTURE §17.1's own TS snippet.** It still reads
+`send(...): Promise<void>` / `{ key, params?, link? }` — the proposal shape core could never implement (no
+plugin catalog exists to resolve a `key` against, and `void` cannot express a partial send). What actually
+ships is what this section shows. See `SKILL.md`'s "Which docs to trust" for the full trace.
+
+### Test it against the refusals
+
+```java
+var ctx = new FakePluginContext();
+ctx.store().asUser(ana).put(Scope.user(), "mark:s2e04:b3", true);   // this is what makes Ana notifiable
+ctx.withNotifier(new FakeNotifier(ctx.store()).withPerUserPerDay(2));
+```
+
+```ts
+const notify = makeMockNotify({ notifiable: ['u-1'], perUserPerDay: 2 });
+const ctx = makeMockCtx({ notify });
+```
+
+`FakeNotifier` reads eligibility from the doc store rather than a list you seed — give a user a row and
+they become notifiable, exactly as they became a participant. The cap is off until you arm it. `ctx.notify`
+/ `ctx.notifier()` default to `null` in both, so a test that never passes one keeps checking your plugin
+survives a manifest with no `notifications` block.
+
+---
+
+## 0.12.x → 0.13.0: rendering the people behind the UUIDs
+
+```diff
+  // plugin.json
+- "platformApi": "0.12.0",
++ "platformApi": "0.13.0",
+```
+
+```diff
+- implementation("dev.mosaicast:plugin-api:0.12.0")
++ implementation("dev.mosaicast:plugin-api:0.13.0")
+- "@mosaicast/plugin-sdk": "^0.12.0"
++ "@mosaicast/plugin-sdk": "^0.13.0"
+```
+
+**Java plugins have nothing else to do** — `PluginContext` gained a method, plugins consume rather than
+implement it, `FakePluginContext` implements the new one for you.
+
+### The one compile break: a hand-built `ctx.user` in a TS test
+
+`ctx.user` gained `displayName` and `avatarUrl`:
+
+```diff
+  const ctx = makeMockCtx({
+-   user: { id: 'u1', role: 'podcaster' },
++   user: { id: 'u1', role: 'podcaster', displayName: 'Ana', avatarUrl: '/api/users/u1/avatar' },
+  });
+```
+
+Anonymous is still `user: null` — nothing to change there. This is the compile break that would otherwise
+silently break every `testing.md` example in this skill that predates 0.13.0; check any hand-built `ctx.user`
+literal in your own tests for it.
+
+### What the release adds
+
+A backend calling `queryAcrossUsers` gets `OwnedDocEntry(userId, …)` — UUIDs and nothing else, so a
+leaderboard built from it had ids and no way to draw a person:
+
+```ts
+const dir = ctx.users;
+if (!dir) return;                      // no `identity` block in this plugin's manifest
+
+const board = await ctx.docs.get<{ userId: string; score: number }[]>('site', 'agg:leaderboard');
+const people = await dir.resolve((board ?? []).map((row) => row.userId));
+const byId = new Map(people.map((u) => [u.id, u]));
+```
+
+```diff
+  // plugin.json
++ "identity": { "resolvesUsers": true },
+```
+
+### The three rules that will catch you
+
+1. **Absent, not redacted — and therefore not index-aligned.** An unknown, erased or pseudonymised id is
+   simply missing; match on `id`, never on position.
+2. **Store UUIDs, resolve at render. Never persist a display name.** The host cannot enforce this one —
+   your storage's own tables are opaque to it.
+3. **`avatarUrl` is finished.** Always `/api/users/{id}/avatar`, always populated — put it in an `src` and
+   stop thinking about it.
+
+It also **resolves rather than enumerates**: no list call, and none is coming.
+
+### Test it against the absent case
+
+```ts
+const users = makeMockUsers({ 'u-1': 'Ana' });
+const ctx = makeMockCtx({ users });
+users.forget('u-1');                   // the erased-author case
+```
+
+```java
+var users = new FakeUsers().withUser(ana, "Ana", Role.FAN);
+var ctx = new FakePluginContext().withUsers(users);
+```
 
 ---
 

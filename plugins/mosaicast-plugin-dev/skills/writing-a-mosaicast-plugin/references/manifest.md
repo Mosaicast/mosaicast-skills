@@ -13,7 +13,7 @@ rejected.
 {
   "id": "sample",
   "version": "2.9.0",
-  "platformApi": "0.12.0",
+  "platformApi": "0.14.0",
   "name": "Sample",
   "license": "Apache-2.0",
   "author": "The Mosaicast Authors",
@@ -31,6 +31,8 @@ rejected.
   "blobs":  { "maxFileBytes": 5242880, "quotaBytes": 268435456, "mimeTypes": ["image/png", "image/jpeg"] },
   "tags":   { "readsVocabulary": true, "writesEpisodes": false },
   "external": { "kinds": ["translation"], "usedBy": "podcaster" },
+  "identity": { "resolvesUsers": true },
+  "notifications": { "sends": true, "perUserPerDay": 5 },
   "config": { "refreshIntervalMinutes": { "type": "number", "default": 30, "editableBy": "podcaster" } },
   "consent": { "services": [] }
 }
@@ -42,8 +44,8 @@ rejected.
 ## `platformApi`
 
 Exact `major.minor` match against the host's `PlatformApi.VERSION`; patch is free. Pre-1.0 the *minor*
-carries breaking changes, so `0.11.x` against a 0.12.x host is rejected, and `"1.x"` fails to parse at all.
-`"0.12"` and `"0.12.0"` both pass against a 0.12.x host — but keep the string identical to the SDK version
+carries breaking changes, so `0.13.x` against a 0.14.x host is rejected, and `"1.x"` fails to parse at all.
+`"0.14"` and `"0.14.0"` both pass against a 0.14.x host — but keep the string identical to the SDK version
 your code builds against, because the contract test and the CI drift guard compare them literally.
 
 ## `slots[]`
@@ -100,6 +102,10 @@ alongside that same gate. There are no schema writes over HTTP, so `writableBy` 
 and `backendOwned` does not reach the blob or tags surfaces at all — neither lets a caller name an existing
 key or row belonging to someone else (a blob ref is a host-minted UUID; a tags write is scoped to your own
 subjects, or recorded with your plugin as its source).
+
+**`identity` and `notifications` sit outside this floor pair entirely** — neither `readableBy` nor
+`writableBy` governs `ctx.users` or `ctx.notify`. Resolving users has no role floor at all (see `identity`
+below); sending a notification is bounded by eligibility and the host's rate limits, not by `data`.
 
 Neither floor applies to the `USER` scope in either direction: no floor makes someone else's partition
 readable, none stands between a caller and their own, and `writableBy` does not gate it (it protects the
@@ -320,6 +326,78 @@ navigation chrome.
   `PluginNavDeclaration` TS type (documentation only) calls it `role`; core's manifest parser expects
   `visibleTo`, the same key a slot uses. Absent means anonymous.
 
+## `identity` — resolving user UUIDs to people (0.13.0)
+
+```json
+"identity": { "resolvesUsers": true }
+```
+
+**Opt-in and declared, never derived** — the same rule `blobs`, `tags` and `external` follow, even though
+your plugin already *has* the ids (`queryAcrossUsers` hands them over freely). What's being granted here is
+not access to the UUIDs but **turning them into a name and a picture**, and that's the part an operator
+should read off the manifest before installing. Absent ⇒ `ctx.users` / `ctx.users()` are `null` and the
+`GET /api/plugins/<id>/users` endpoint 404s — same shape as `schema`, `blobs`, `tags`.
+
+- **`resolvesUsers`** — the only field. **`true` is the default when the block is present and the field is
+  absent or `null`** (`!Boolean.FALSE.equals(resolvesUsers)` — anything but an explicit `false` reads as
+  yes). `"identity": {}` therefore grants the capability exactly as `"identity": { "resolvesUsers": true }`
+  does. This is the *opposite* default from `data.readableBy` (which closes on silence) and from `tags`
+  (which rejects a block asking for nothing) — read `"identity": {}` as "yes" here, not as "declared but
+  inert."
+- **No `validate()` method exists for this block at all** — unlike `tags`/`blobs`/`external`, nothing here
+  is ever a load-time rejection. A malformed or empty block loads clean and defaults to granting the
+  capability; there is no "asks for nothing" refusal to catch a mistake.
+- **No role floor on the read.** `GET /api/plugins/<id>/users?ids=…` is not gated by `data.readableBy` —
+  there is nothing here a visitor couldn't already see if they can see whatever rendered the ids (a public
+  leaderboard, say), so an anonymous caller may resolve too.
+- **It resolves, it never enumerates.** Comma-separated `ids=` only, capped at 500 per call (extra ids are
+  silently dropped, not rejected); there is no list/search endpoint and never will be — you may only ask
+  about ids you already came by through your own scope.
+- **Unresolvable is absent, not an error or a redaction.** An unknown, malformed, erased or pseudonymised id
+  is simply missing from the response array — one shape for all four cases, so the answer can never be used
+  to tell them apart. A malformed UUID in `ids=` is skipped, not a 400.
+
+## `notifications` — an in-app inbox for your plugin's users (0.14.0)
+
+```json
+"notifications": { "sends": true, "perUserPerDay": 5 }
+```
+
+**Opt-in and declared, never derived**, on the same terms as `identity`. Absent ⇒ `ctx.notify` /
+`ctx.notifier()` are `null` and `POST /api/plugins/<id>/notify` 404s.
+
+- **`sends`** — defaults to `true` when the block is present and the field is absent, **exactly like
+  `identity.resolvesUsers`** — `"notifications": {}` already grants the capability. Same "opposite of
+  `tags`" caveat applies, and the same absence of any `validate()` method: a malformed block loads clean.
+- **`perUserPerDay`** — what your plugin *asks* for; the operator's host-wide cap
+  (`mosaicast.plugin-notifications.hard-per-user-per-day`, default **20**) is what you actually get, taken
+  as the smaller of the two — exactly how `blobs` quotas work. Omitting it takes the operator's *default*
+  (`mosaicast.plugin-notifications.default-per-user-per-day`, default **5**), not zero: an absent number
+  reads as "no opinion," never as "never send." There is **no per-plugin admin override** the way `blobs`
+  has one — the caps are host-wide config only, as of this writing.
+- **This is the one plugin surface that writes into *another* user's experience.** Everything else a plugin
+  touches is its own scope or the current visitor's. Two host-enforced bounds, neither yours to widen:
+  - **Eligibility**: you may only notify a user id your plugin already holds `USER`-scope data for — the
+    same partitions `queryAcrossUsers` reads. An ineligible id is silently dropped from `send()`'s return
+    value, never an error; your call never learns *why* one recipient didn't get it.
+  - **A batch is capped** at `mosaicast.plugin-notifications.max-batch` (default **200**) — checked against
+    the *eligible* count, not the raw list you passed, so asking for 1000 with 150 eligible passes. Over the
+    cap is `NotificationException.Reason.RATE_LIMITED` / a **429**, and it is `retryable()` — hold the batch
+    for the next scheduler tick rather than dropping it.
+- **`NotifyMessage.text` must contain `en`.** The one language a site can never switch off, so it is the
+  only fallback a reader is guaranteed to understand; a message missing it is rejected before anything is
+  sent (Java: `IllegalArgumentException` at construction; TS: the mock and the real client both refuse it).
+  Use `notifyText(catalogs, key, params)` — built from the same catalogs you already pass
+  `createPluginI18n` — rather than filling the map by hand, which is exactly where a plugin quietly ships
+  one locale short.
+- **`link` is host-validated and internal-only.** Accepts a bare core absolute path (`/episodes/kraken`) or
+  a subpath of your own `/p/<pluginId>/` — with or without the `/p/<pluginId>/` prefix. Refused
+  (`INVALID_LINK` / **400**, not retryable) for anything with a scheme, a leading `//`, a backslash, a
+  colon, or a `..` segment — including protocol-relative `//evil.example`, which reads like a path and
+  isn't one — and for a path under someone *else's* `/p/<otherPluginId>/`.
+- **There is no read side, ever.** You cannot list an inbox, count it, mark it read, or learn whether a
+  message was opened. And nothing here reaches email — in-app only.
+
 ## `license` / `author` / `homepage` / `attribution` — credit (core 0.6.15)
 
 ```json
@@ -399,7 +477,9 @@ A **service-level** declaration. The legacy `{ categories, externalSources }` sh
 `nav entries declared without a page slot` · `nav entry has no label` ·
 `nav path must be a plain subpath of the plugin, without a leading / or ..` · `duplicate nav path: …` ·
 `license`/`author`/`homepage`/`attribution` are **never** a rejection reason — see above — · `icon` on a
-`nav` entry is **never** a rejection reason, it just fails to render ·
+`nav` entry is **never** a rejection reason, it just fails to render · **nothing under `identity` or
+`notifications` is ever a rejection reason** — neither block has a `validate*()` method, so any shape
+(including one that inverts the field to `false`, or one that is simply `{}`) loads without error ·
 `config field '%s' has unknown type/unknown editableBy/default
 does not match declared type` · `consent must declare services[]` (plus missing `name`, missing `category`,
 bad category token, blank or scheme-less host, bad wildcard, unparsable origin, storage item without a name,

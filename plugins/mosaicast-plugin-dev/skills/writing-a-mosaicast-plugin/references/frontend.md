@@ -23,11 +23,14 @@ scope: { type: 'site'|'feed'|'season'|'episode'; id: string }   // slot scope; n
 episodes: string[]                                              // resolved, access-filtered public slugs
 episodeLabels?: Record<string, string>                          // slug → label; may be absent or partial
 episode?: { status: 'PLANNED'|'PUBLISHED'|'WITHDRAWN' }         // see "what the host actually supplies"
-user: { id: string; role: 'admin'|'podcaster'|'fan' } | null    // null = anonymous
+user: { id: string; role: 'admin'|'podcaster'|'fan';                // null = anonymous
+         displayName: string; avatarUrl: string } | null            // presentation, added 0.13.0
 api: PluginApiClient                                            // /api/plugins/<id>/*, auth attached; typed errors
 docs: DocClient                                                  // never null — typed doc-store client (0.9.0)
 feeds: FeedsClient                                               // never null — episode display snapshots (0.9.0)
 tags: TagsClient | null                                          // null unless the manifest declares `tags` (0.9.0)
+users: UserDirectory | null                                      // null unless the manifest declares `identity` (0.13.0)
+notify: NotifyClient | null                                      // null unless the manifest declares `notifications` (0.14.0)
 schema: SchemaClient | null                                     // null unless the manifest declares storage.schema
 blobs: BlobClient | null                                        // null unless the manifest declares a blobs block
 log(level: 'debug'|'info'|'warn'|'error', message: string): void
@@ -49,22 +52,24 @@ theme: ThemeTokens
 Also exported: `PLATFORM_API_VERSION`, `SELF_SCOPE_ID` (`'me'`), `DataScopeType`, `DocEntry<T>`,
 `PagedDocs<T>`, `PluginRoute`, `PluginLinks`, `SchemaClient`/`SchemaQuery`/`SchemaPredicate`/`SchemaOp`/
 `SchemaPage<T>`, `BlobClient`/`BlobInfo`/`BlobPage`/`BlobQuota`, `DocClient`/`DocTarget`/`DOC_KEY_PATTERN`,
-`FeedsClient`/`DISPLAY_BATCH_LIMIT`, `TagsClient`/`TagInfo`, `TranslationClient`/`TranslationRequest`/
+`FeedsClient`/`DISPLAY_BATCH_LIMIT`, `TagsClient`/`TagInfo`, `UserDirectory`/`UserRef`,
+`NotifyClient`/`NotifyMessage`/`notifyText`, `TranslationClient`/`TranslationRequest`/
 `TranslationResult`, `LocaleInfo`, `PluginApiError`/`isPluginApiError`/`ProblemDetail`,
 `resolveArtwork(snapshot)`, `matchRoute(path, patterns)`, `iconCss`/`iconMask`, `createPluginI18n`, and the
 documentation-only manifest types (`PluginManifest`, `PluginTagsDeclaration`, `PluginExternalDeclaration`,
-`ExternalServiceKind`, `PluginNavDeclaration`, …). Note there is **no** TS type for the manifest's `blobs`
-block — core validates it, and nothing in the SDK reads `plugin.json`.
+`ExternalServiceKind`, `PluginNavDeclaration`, `PluginIdentityDeclaration`, `PluginNotificationsDeclaration`,
+…). Note there is **no** TS type for the manifest's `blobs` block — core validates it, and nothing in the
+SDK reads `plugin.json`.
 
 ## What the host actually supplies today
 
-Verified against core's `frontend/src/plugins/buildCtx.ts` at 0.6.24 — assume this until core says
-otherwise. **`docs`, `feeds`, `tags`, `schema`, `blobs`, `translation`, `locale.available/content` and
-`consent.has/granted/request` are real, wired implementations** — the "contract ahead of implementation" gap
-0.9.0 shipped with has closed for all of them.
+Verified against core's `frontend/src/plugins/buildCtx.ts` at 0.7.0 — assume this until core says
+otherwise. **`docs`, `feeds`, `tags`, `users`, `notify`, `schema`, `blobs`, `translation`,
+`locale.available/content` and `consent.has/granted/request` are real, wired implementations** — the
+"contract ahead of implementation" gap 0.9.0 shipped with has closed for all of them.
 
 - **`ctx.episode` is not populated.** Never branch on `episode?.status`; if you need publication state, it is
-  not available client-side. Still true at 0.6.24 — this is the one field the shell has never wired.
+  not available client-side. Still true at 0.7.0 — this is the one field the shell has never wired.
 - **`filter.current()` always returns `{}`**, and **`filter.onChange`, `player.on`, `route.onChange` and
   `locale.onChange` return no-op unsubscribes that never fire.** `consent.onChange` and `route.navigate` are
   the live ones. This is unchanged since the 0.8.0-era skill and is worth re-checking on every bump, since
@@ -235,6 +240,88 @@ filter options *and* what core recommends beside that episode, so they need the 
 reject with a `PluginApiError` (403) without it. What you may never do, and the host enforces rather than
 merely discourages it: delete a tag from the vocabulary, rename one, or remove another writer's assignment
 — `untagEpisode` only ever takes back your own row, even if the feed tagged the same episode the same way.
+
+### `ctx.users` — turning UUIDs into people (0.13.0)
+
+`null` unless the manifest declares an `identity` block. Fixes what `queryAcrossUsers`-built aggregates
+couldn't do: a leaderboard has ids and documents, and no way to draw a person.
+
+```ts
+const dir = ctx.users;
+if (!dir) return;                                    // no `identity` block declared
+
+const board = await ctx.docs.get<{ userId: string; score: number }[]>('site', 'agg:leaderboard');
+const people = await dir.resolve((board ?? []).map((row) => row.userId));
+const byId = new Map(people.map((u) => [u.id, u]));  // match on id — the array is not index-aligned
+
+for (const row of board ?? []) {
+  const who = byId.get(row.userId);
+  render(who?.displayName ?? 'Former listener', who?.avatarUrl);  // the row outlives its author
+}
+```
+
+```ts
+resolve(ids: string[]): Promise<UserRef[]>   // UserRef = { id, displayName, avatarUrl, role }
+```
+
+- **Absent, not redacted.** An unknown, erased or pseudonymised id is simply missing from the resolved
+  array — there is no `null` entry and no tombstone, so **the result is not index-aligned with `ids`** and
+  may be shorter. Never read `found[i]` and assume it answers `ids[i]`.
+- **Resolves, does not enumerate.** No list call, and none is coming — you may only ask about ids you
+  already hold through your own scope.
+- **`avatarUrl` is always `/api/users/{id}/avatar`, always populated.** Every user has one (host-generated
+  from the UUID when there's no provider picture). Put it straight in an `src`.
+- **Store the UUID, resolve at render — never persist `displayName`.** The host cannot enforce this one:
+  it provisioned your schema tables without ever learning which column holds a person, so §12.8's erasure
+  guarantee cannot reach inside them. A name you copied outlives both the rename meant to shed it and the
+  erasure meant to end it.
+- `ctx.user` (the signed-in caller, not `ctx.users`) also gained `displayName` and `avatarUrl` this
+  release — same fields, same rule: presentation, read at render, never kept.
+
+### `ctx.notify` — putting a message in a user's inbox (0.14.0)
+
+`null` unless the manifest declares a `notifications` block. **Most real use is on the backend**
+(`ctx.notifier()` — see `backend.md`); reach for this one when a visitor's own action is what *other*
+participants need to hear about.
+
+```ts
+const notify = ctx.notify;
+if (!notify) return;                                  // no `notifications` block declared
+
+const told = await notify.send(participants, {
+  text: notifyText(catalogs, 'bingo.resolved', { episode: 'S02E04' }),  // your createPluginI18n catalogs
+  link: `board/${boardId}`,                            // your own subtree; host-validated
+});
+if (told.length < participants.length) prunePartnerList(participants, told);  // read the return value
+```
+
+```ts
+send(userIds: string[], msg: NotifyMessage): Promise<string[]>   // NotifyMessage = { text, link? }
+```
+
+`notifyText(catalogs, key, params?)` builds the per-locale `text` map from the same catalogs you already
+pass `createPluginI18n`, interpolating each language's template. A locale whose catalog lacks the key is
+**left out** rather than filled with the literal key; if `en` itself is missing, it falls back to
+`catalogs.en?.[key] ?? key` rather than throwing (unlike a hand-built map missing `en`, which the client
+refuses before sending — see below).
+
+**This is the one plugin surface that writes into somebody else's experience.** Two bounds the host holds,
+not you:
+
+- **Eligibility** — only a user id your plugin already holds `USER`-scope data for. An ineligible or erased
+  recipient is silently absent from the resolved array, never a rejection — **the return value is the only
+  way to see a partial send**, and a component that ignores it notifies nobody while looking healthy.
+- **Rate limits are the host's**, not a counter you keep. `send` rejects with a `PluginApiError`: **429**
+  when the send cap is exhausted (hold the batch for a later render/tick, do not drop it), **400** when
+  `msg`/`link` is one the host will not draw (a code bug — will fail identically next time).
+
+**`text` must contain `en`** or the call is refused before it reaches the network — the one language a site
+can never switch off, and the only fallback a reader is guaranteed to understand. **`link` is internal
+only**: a bare core path, or a subpath of your own `/p/<pluginId>/` (with or without the prefix); anything
+with a scheme, `//`, a backslash, `:`, `..`, or another plugin's namespace is refused.
+
+There is **no read side** — you cannot list, count or mark an inbox, or learn whether anyone opened what
+you sent. Nothing here reaches email.
 
 ### `ctx.locale.available()` / `.content()` and `ctx.translation` (0.10.0 / 0.11.0)
 
