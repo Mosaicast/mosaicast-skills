@@ -8,7 +8,7 @@ description: Use when cutting a release of a Mosaicast plugin, bumping its versi
 Two versions are in play and they are not the same thing:
 
 - **the plugin's own version** — SemVer, yours to choose, lives in three files
-- **`platformApi`** — the host contract the backend compiled against, currently **0.12.0** (core **0.6.24**
+- **`platformApi`** — the host contract the backend compiled against, currently **0.14.0** (core **0.7.0**
   hosts it), matched by core on exact `major.minor` (patch is free to the host — but keep one string across
   all four anchors, because the contract test and the CI drift guard compare them literally)
 
@@ -71,7 +71,7 @@ The SDK artifacts live on GitHub Packages, which **requires authentication even 
 in CI. Without it the backend build fails to resolve `dev.mosaicast:plugin-api` with a 401 that reads like
 the artifact does not exist.
 
-**0.12.0 is published** on both npm and GitHub Packages (`v0.12.0`), so no workaround is needed today. If a
+**0.14.0 is published** on both npm and GitHub Packages (`v0.14.0`), so no workaround is needed today. If a
 future SDK version you need is on master but **untagged**, resolve it from a local checkout instead — `mavenLocal()` after `./gradlew publishToMavenLocal` in the SDK repo, or
 `includeBuild("../mosaicast-plugin-sdk")`. Do not ship a release built that way without confirming the
 artifact is public first, or nobody else can rebuild it.

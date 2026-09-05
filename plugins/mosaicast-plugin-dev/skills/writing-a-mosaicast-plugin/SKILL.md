@@ -1,6 +1,6 @@
 ---
 name: writing-a-mosaicast-plugin
-description: Use when creating or modifying a Mosaicast plugin (any mosaicast-plugin-* repo or the plugin-sample). Covers the plugin.json manifest (slots and placements, the page slot behind /p/<id>/*, data access floors, backendOwned keys, consent services, doc vs schema storage, the blobs file-storage block, the tags vocabulary block, the external-services block, nav entrances into the host menu, the license/author/homepage/attribution credit fields), the backend PluginBackend/PluginContext contract and its optional extension points (ShareMetadataProvider and its per-URL OgMeta.locale, SitemapProvider and its hreflang-alternates SitemapUrl.alternates, PageRouteProvider, SearchProvider, UserDataHandler), per-user data in the USER scope, the frontend Web Component via the SDK ctx (ctx.docs, ctx.feeds, ctx.tags, ctx.schema reads, ctx.blobs uploads, ctx.links, ctx.locale.available/content, ctx.translation, ctx.route.navigate, typed ctx.api errors) and theme tokens including the --mc-icon-* icon set, testing against the SDK test kit, and installing a plugin by spec (owner/repo@tag#sha256). Trigger whenever writing the manifest, adding a slot, wiring ctx, storing per-user data, uploading or serving files, linking to core pages, querying schema tables from the frontend, reading or writing the shared tag vocabulary, contributing to site search, handling account deletion/export, real 404s for a page plugin's unknown subpaths, declaring external-service (translation) use, declaring what language a plugin page or sitemap translation group is written in, adding a nav entrance, navigating inside a page plugin, declaring backend-owned or schema storage, styling a plugin tile's icons, crediting a plugin's license or data source, bumping platformApi, installing or releasing a plugin, or building a plugin's backend or frontend.
+description: Use when creating or modifying a Mosaicast plugin (any mosaicast-plugin-* repo or the plugin-sample). Covers the plugin.json manifest (slots and placements, the page slot behind /p/<id>/*, data access floors, backendOwned keys, consent services, doc vs schema storage, the blobs file-storage block, the tags vocabulary block, the external-services block, the identity block (ctx.users, resolving user UUIDs to a name/avatar), the notifications block (ctx.notify/ctx.notifier, putting a message in a user's inbox), nav entrances into the host menu, the license/author/homepage/attribution credit fields), the backend PluginBackend/PluginContext contract and its optional extension points (ShareMetadataProvider and its per-URL OgMeta.locale, SitemapProvider and its hreflang-alternates SitemapUrl.alternates, PageRouteProvider, SearchProvider, UserDataHandler), per-user data in the USER scope, the frontend Web Component via the SDK ctx (ctx.docs, ctx.feeds, ctx.tags, ctx.users, ctx.notify, ctx.schema reads, ctx.blobs uploads, ctx.links, ctx.locale.available/content, ctx.translation, ctx.route.navigate, typed ctx.api errors) and theme tokens including the --mc-icon-* icon set, testing against the SDK test kit, and installing a plugin by spec (owner/repo@tag#sha256). Trigger whenever writing the manifest, adding a slot, wiring ctx, storing per-user data, uploading or serving files, linking to core pages, querying schema tables from the frontend, reading or writing the shared tag vocabulary, contributing to site search, handling account deletion/export, real 404s for a page plugin's unknown subpaths, declaring external-service (translation) use, declaring what language a plugin page or sitemap translation group is written in, resolving user ids to a display name/avatar, sending an in-app notification to a user, adding a nav entrance, navigating inside a page plugin, declaring backend-owned or schema storage, styling a plugin tile's icons, crediting a plugin's license or data source, bumping platformApi, installing or releasing a plugin, or building a plugin's backend or frontend.
 ---
 
 # Writing a Mosaicast plugin
@@ -10,33 +10,34 @@ doc and this skill disagree, see "Which docs to trust" below.
 
 ## Version pins — get these wrong and the plugin does not load
 
-Contract version is **0.12.0** (`PlatformApi.VERSION`, `PLATFORM_API_VERSION`), and core **0.6.24** hosts it.
-The host demands an **exact `major.minor`** match; patch is free. A `0.11.x` manifest is *rejected at load*,
+Contract version is **0.14.0** (`PlatformApi.VERSION`, `PLATFORM_API_VERSION`), and core **0.7.0** hosts it.
+The host demands an **exact `major.minor`** match; patch is free. A `0.13.x` manifest is *rejected at load*,
 not warned about.
 
 ```json5
-"platformApi": "0.12.0"                                 // plugin.json
+"platformApi": "0.14.0"                                 // plugin.json
 ```
 ```kotlin
-compileOnly("dev.mosaicast:plugin-api:0.12.0")          // backend/build.gradle.kts
+compileOnly("dev.mosaicast:plugin-api:0.14.0")          // backend/build.gradle.kts
 compileOnly("org.pf4j:pf4j:3.15.1")
 annotationProcessor("org.pf4j:pf4j:3.15.1")             // mandatory: generates the @Extension index
-testImplementation("dev.mosaicast:plugin-testkit:0.12.0")
+testImplementation("dev.mosaicast:plugin-testkit:0.14.0")
 ```
 ```json5
-"@mosaicast/plugin-sdk": "0.12.0"                       // frontend/package.json
+"@mosaicast/plugin-sdk": "0.14.0"                       // frontend/package.json
 ```
 
-Both halves of `0.12.0` are published and tagged `v0.12.0` (npm, and GitHub Packages for the Java artifacts)
+Both halves of `0.14.0` are published and tagged `v0.14.0` (npm, and GitHub Packages for the Java artifacts)
 — no `mavenLocal()` workaround needed. Maven is GitHub Packages
 (`https://maven.pkg.github.com/Mosaicast/mosaicast-plugin-sdk`), which needs a PAT with `read:packages`
-**even for public reads**. Jackson is **3.2.1** (`tools.jackson.*`), not `com.fasterxml`. **Pin the same
+**even for public reads**. Jackson is **3.2.2** (`tools.jackson.*`), not `com.fasterxml`. **Pin the same
 string in all four places** — the CI drift guard and the manifest contract test both compare them.
 
-Coming from an older pin? `references/migrating.md` walks 0.8.0 → 0.9.0 → 0.9.1 → 0.10.0 → 0.11.0 → 0.12.0 in
-order — read it top to bottom rather than jumping straight to 0.12.0, since 0.9.0's compile break and 0.10.0's
-silent `ctx.translation` gate both still apply on the way up. 0.12.0 itself is the easy step: a manifest bump
-and a rebuild, no code change unless you deconstruct `OgMeta`/`SitemapUrl` as record patterns.
+Coming from an older pin? `references/migrating.md` walks 0.8.0 → 0.9.0 → 0.9.1 → 0.10.0 → 0.11.0 → 0.12.0 →
+0.13.0 → 0.14.0 in order — read it top to bottom rather than jumping straight to 0.14.0, since 0.9.0's compile
+break and 0.10.0's silent `ctx.translation` gate both still apply on the way up. 0.12.0 was the easy step
+(manifest bump only); 0.13.0 and 0.14.0 each add one more optional, `null`-unless-declared capability
+(`ctx.users`, `ctx.notify`) on the same shape as `schema`/`blobs`/`tags`.
 
 To re-check the pin yourself:
 `grep -n 'VERSION = ' mosaicast-plugin-sdk/plugin-api/src/main/java/dev/mosaicast/plugin/api/PlatformApi.java`
@@ -99,6 +100,23 @@ To re-check the pin yourself:
     resolves to `null` on 404 instead of rejecting; `ctx.api.getOrNull` does the same for the raw client.
     `ctx.feeds.display`/`displayMany` replace a scheduled ingest that copies episode snapshots into your own
     doc store — read them live, they are not authoritative and the host overwrites them on every refetch.
+18. **`ctx.users` resolves, it does not enumerate, and its answer is absent-not-redacted.** An unknown,
+    erased or pseudonymised id is simply *missing* from the result — no `null` element, no tombstone — so
+    the array is not index-aligned with what you asked for and may be shorter. Match on `id`, never on
+    position. **Store the UUID, resolve at render, never persist a `displayName`** — the host cannot enforce
+    that one; a copied name outlives the rename and the erasure both meant to end it.
+19. **`ctx.notify`/`ctx.notifier()` write into *another* user's experience — the one plugin surface that
+    does.** Two bounds you cannot lift: you may only notify a user your plugin already holds `USER`-scope
+    data for (the same partitions `queryAcrossUsers` reads), and the rate limits are the host's, not
+    yours. `send()` returns who was **actually** notified — a partial send is normal, not a bug, so read the
+    return value or a stale participant list notifies nobody while looking healthy. `NotifyMessage.text`
+    must carry every language up front (`en` required) — there is no read side, and nothing here reaches
+    email.
+20. **Neither `identity` nor `notifications` is validated at load.** Unlike `tags`/`blobs`/`external`,
+    core has no `validate*()` for either block — any shape loads, and an absent flag (`resolvesUsers`,
+    `sends`) **defaults to `true`** the moment you declare the block at all, the opposite default from what
+    the SDK's own TS types (which mark both required) imply. `"identity": {}` is `"identity": {
+    "resolvesUsers": true }`.
 
 ## Before you build: ask for a browser and an instance
 
@@ -150,11 +168,12 @@ Five distinct URL namespaces, don't conflate them:
 | Web Component: `ctx` surface, `ctx.schema` queries, `ctx.blobs` uploads, `ctx.links`, `route.navigate`, doc-store HTTP calls, CSP, theme, `--mc-icon-*`, i18n | `references/frontend.md` |
 | Tests (required by the BRIEF's DoD) | `references/testing.md` |
 | Browser + live-instance setup, viewport matrix, data-safety rules, the build→install→restart loop, installing a released plugin by spec | `references/dev-environment.md` |
-| Moving an existing plugin from 0.8.x up to 0.12.0 | `references/migrating.md` |
+| Moving an existing plugin from 0.8.x up to 0.14.0 | `references/migrating.md` |
 
-Live reference implementation: **`mosaicast-plugin-sample` v2.10.0**, still on **SDK 0.8.0** as of this
-writing — it predates `tags`/`feeds`/`docs`/`external`/`nav` and is not a source for those. It declares a
-`blobs` block and exercises `ctx.blobs` (upload, `urlFor`, the `null` degrade path) and
+Live reference implementation: **`mosaicast-plugin-sample` v2.11.0**, still on **SDK 0.8.0** as of this
+writing — it predates `tags`/`feeds`/`docs`/`external`/`nav`/`identity`/`notifications` and is not a source
+for any of them. It declares a `blobs` block and exercises `ctx.blobs` (upload, `urlFor`, the `null` degrade
+path) and
 `ctx.links.episode/feed`; its `README.md` carries the worked `curl` forgery that motivates `backendOwned`,
 its page slot uses `ctx.route.navigate`, and its `docs/BRIEF.md` pattern is the definition of done for every
 plugin repo. Re-check its tag before relying on a version number quoted here — it moves independently of the
@@ -163,25 +182,42 @@ SDK and has lagged it before.
 ## Which docs to trust
 
 - **SDK `README.md` / `CHANGELOG.md` / `MIGRATION.md` and the Javadoc/TSDoc** — accurate, take signatures from here.
-- **`docs/ARCHITECTURE.md`** — current through the `?lang=` URL scheme and `hreflang` alternates (§6.4, §6.6,
-  §12.7, 0.12.0). Correct on the `data` block and `backendOwned` (§7.2), the `tags` and `external` blocks and
-  their refusal shapes (§7.2), `nav[]` and the default entry a page plugin gets without one (§7.2 — but see
-  the `role`/`visibleTo` drift below), the `USER` scope, `queryAcrossUsers` and every extension point
-  including `SearchProvider`, `PageRouteProvider` and `UserDataHandler` (§7.4), the schema provider **and its
-  read HTTP surface** (§7.6), the `blobs` manifest block and file storage (§7.2, §11, §11.1), site-wide
-  search (§6.7), account deletion reaching plugin data (§12.8), languages as a runtime registry and
-  host-mediated translation (§12.7, §16), and purge (§7.8). §7.5's `ctx` block lists `docs`, `feeds`, `tags`,
-  `schema`, `blobs`, `links`, `locale.available/content`, `translation` and `route.navigate`. §6.6 now says
-  `og:locale` is the language of *that URL*, not an install-wide constant — read this before implementing
-  `ShareMetadataProvider`, since it is the reason `OgMeta.locale` exists (see `backend.md`).
+- **`docs/ARCHITECTURE.md`** — current through §8.8 (`ctx.users`, the `identity` block) and mostly current
+  on §17 (notifications) — **but see the flat-out wrong code block below**, which is worth reading before
+  the rest of this bullet. Correct on the `data` block and `backendOwned` (§7.2), the `tags` and `external`
+  blocks and their refusal shapes (§7.2), `nav[]` and the default entry a page plugin gets without one
+  (§7.2 — but see the `role`/`visibleTo` drift below), the `USER` scope, `queryAcrossUsers` and every
+  extension point including `SearchProvider`, `PageRouteProvider` and `UserDataHandler` (§7.4), the schema
+  provider **and its read HTTP surface** (§7.6), the `blobs` manifest block and file storage (§7.2, §11,
+  §11.1), the `?lang=` URL scheme and `hreflang` alternates (§6.4, §6.6, §12.7), site-wide search (§6.7),
+  account deletion reaching plugin data (§12.8), languages as a runtime registry and host-mediated
+  translation (§12.7, §16), and purge (§7.8). §7.5's `ctx` block lists `docs`, `feeds`, `tags`, `users`,
+  `notify`, `schema`, `blobs`, `links`, `locale.available/content`, `translation` and `route.navigate`.
+  §6.6 says `og:locale` is the language of *that URL*, not an install-wide constant — read this before
+  implementing `ShareMetadataProvider`, since it is the reason `OgMeta.locale` exists (see `backend.md`).
   Still stale on: the `"platformApi": "1.x"` example (that string does not even parse), the example's
   `placement: "admin"` slot (accepted by validation, rendered nowhere), §7.3's region list (missing `page`),
   §7.5's `ctx` block (still missing `episodeLabels`, `log`, `consent.granted/request` and the `Unsubscribe`
   returns), and a doc-store "indexable fields" escape hatch that was never implemented.
+- **§17.1's own TS snippet does not compile against anything real — do not copy it.** It still shows
+  `NotifyClient.send(...): Promise<void>` and `NotifyMessage = { key, params?, link? }`, which is the
+  *proposal* the SDK's own CHANGELOG explains it had to abandon: nothing in core can resolve a plugin's
+  translation `key` (a plugin's catalogs live in its frontend bundle, and the bell renders on pages that
+  bundle never loads), and `void` cannot express the partial send the host's eligibility rule guarantees.
+  What actually ships — and what `backend.md`/`frontend.md` document — is `send(...): Promise<string[]>`
+  (TS) / `List<UUID> send(...)` (Java) and `NotifyMessage.text` as a `locale → sentence` map built with
+  `notifyText(catalogs, key, params)`. The prose in §17 (the eligibility rule, the rate-limit shape,
+  in-app-only) is accurate; only this one code block is not.
 - **The SDK's `PluginNavDeclaration` TS type disagrees with core on one field name.** The TS type
   (documentation-only, like the rest of `PluginManifest`) calls it `role`; core's `NavEntry` record — what
   actually parses `plugin.json` — calls it `visibleTo`. Write `visibleTo`; core is authoritative on the
   manifest, full stop.
+- **Neither `identity` nor `notifications` is validated at load, unlike every other opt-in block.**
+  `tags`/`blobs`/`external` reject a block that asks for nothing; `identity`/`notifications` have no
+  `validate*()` method at all — `"identity": {}` and `"notifications": {}` load silently and *default their
+  one flag to true* (`resolvesUsers`/`sends` default true when the field is absent, not false), unlike the
+  SDK's TS types, which mark both fields required. A typo here is not a load-time error; it is a plugin
+  that quietly got the capability it asked for.
 - **`mosaicast-plugin-bingo` / `-stats` / `-wiki`** — bootstrap-only repos carrying a **pre-0.4.0**
   `ARCHITECTURE.md` copy and BRIEFs that specify the legacy consent shape and the per-user-key IDOR
   (`card:fan:{userId}`). Treat their docs as untrusted; the SDK and the sample win.

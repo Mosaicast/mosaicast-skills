@@ -4,16 +4,18 @@ Required by every repo's `docs/BRIEF.md` DoD (ARCHITECTURE §13.5). No core, no 
 
 ## Backend — `dev.mosaicast.plugin.testkit.*`
 
-`testImplementation("dev.mosaicast:plugin-testkit:0.12.0")`
+`testImplementation("dev.mosaicast:plugin-testkit:0.14.0")`
 
 | Fake | Notes |
 |---|---|
-| `FakePluginContext` | `store()` narrows to `InMemoryDocStore` and `logger()` to `RecordingLogger`, so no casts. `onSchedule` runs the task **synchronously and immediately**; `scheduledCount()` counts registrations. `withTags(Tags)` / `withLocales(Locales)` / `withTranslation(Translation)` are **chaining mutators**, not constructor parameters — the constructor list stopped growing at five arguments (`store, config, feeds, schema[, blobs]`) on purpose (0.9.0). |
+| `FakePluginContext` | `store()` narrows to `InMemoryDocStore` and `logger()` to `RecordingLogger`, so no casts. `onSchedule` runs the task **synchronously and immediately**; `scheduledCount()` counts registrations. `withTags(Tags)` / `withLocales(Locales)` / `withTranslation(Translation)` / `withUsers(Users)` (0.13.0) / `withNotifier(Notifier)` (0.14.0) are **chaining mutators**, not constructor parameters — the constructor list stopped growing at five arguments (`store, config, feeds, schema[, blobs]`) on purpose (0.9.0). |
 | `InMemoryDocStore` | `asUser(uuid)`, `docsOf(uuid)`, `withBackendOwned(...)`. Optional `ObjectMapper` ctor — Jackson 3, so `JsonMapper.builder().build()`. |
 | `FakeSchemaStore` | `new FakeSchemaStore(ns).withEntity("page", "slug", "title").withFulltext("page", "markdown")` — enforces the same declaration the host does. |
 | `InMemoryPluginBlobs` | `withLimits(maxFile, quota)`, `withMimeTypes(Set.of(…))`, `rejectContent("bad.png")`, plus `usedBytes()` / `size()` / `bytesOf(ref)`. Refuses what the host refuses. |
 | `FakeFeedAccess` | `withDisplay(refId, snapshot)`; `display(unknownId)` throws; `episodesIn(Scope.user())` is empty. |
 | `FakeTags` (0.9.0) | `withEpisodeWrites()` stands in for `tags.writesEpisodes`, **off by default** so the refused branch gets exercised; `withFeedTag(slug, tag)` seeds a row this plugin may read but must not remove. Canonicalises tags exactly as the host does (`FakeTags.canonical(tag)` is exposed to assert against). |
+| `FakeUsers` (0.13.0) | `withUser(id, name, role)` / `withUser(name, role)` (generates and returns a UUID) seeds a resolvable user — `avatarUrl` is derived, never accepted, so a test can't assert a shape production never produces. `withoutUser(id)` stages the erased-author case. `resolvedIds()` records every id asked for, across calls, for pinning "one batched lookup, not N." |
+| `FakeNotifier` (0.14.0) | Wraps an `InMemoryDocStore` (pass the same one `FakePluginContext` uses) and reads eligibility from **its user partitions** rather than a seeded list — give a user a row and they become notifiable, exactly how the host decides. `withPerUserPerDay(n)` arms the cap, **off by default**. `delivered()` / `messagesFor(userId)` are the assertion surface; `notifiable()` exposes the eligible set directly, for asserting the rule itself rather than inferring it from a send. |
 | `FakeLocales` (0.10.0) | `FakeLocales.englishOnly()`, `.withUi(codes...)` (also adds to content), `.withContent(codes...)`, `.withDefault(code)`. |
 | `FakeTranslation` (0.10.0) | `FakeTranslation.marking()` succeeds and marks output `"[to] text"`; `FakeTranslation.failing(reason)` always throws `TranslationException`; `.unavailable()` makes `available()` lie `false` while `translate` still works — the race the real host has between an admin's removal and your next call. |
 | `MapPluginConfig` | `new MapPluginConfig().with("refreshIntervalMinutes", 5)` |
@@ -99,6 +101,22 @@ assertEquals(List.of("maritime"), tags.tagsOn("kraken-ep")); // your untag of th
 ```
 
 ```java
+var store = new InMemoryDocStore();
+var alice = UUID.randomUUID();
+store.asUser(alice).put(Scope.user(), "mark:s2e04:b3", true);   // this row is what makes Alice notifiable
+
+var users = new FakeUsers().withUser(alice, "Alice", Role.FAN);
+var notifier = new FakeNotifier(store).withPerUserPerDay(2);
+var ctx = new FakePluginContext(store, new MapPluginConfig(), new FakeFeedAccess(Map.of()), null)
+        .withUsers(users).withNotifier(notifier);
+
+plugin.register(ctx);                                       // your backend calls ctx.notifier().send(...)
+
+assertEquals(List.of(alice), notifier.delivered().stream().map(FakeNotifier.Delivery::userId).toList());
+assertEquals("Alice", users.resolve(List.of(alice)).getFirst().displayName());
+```
+
+```java
 var results = new SearchProviderHarness(new WikiSearch(pages)).search("kraken");
 assertTrue(results.forRole(Role.ADMIN).size() >= results.forRole(null).size());
 assertFalse(results.leakedToAnonymous("_admin/draft-page"));   // the one thing this harness exists to catch
@@ -130,12 +148,12 @@ Mount the element with `makeMockCtx(overrides)` and assert on the DOM.
 ```ts
 import {
   makeMockCtx, makeMockConsent, makeMockSchema, makeMockBlobs, makeMockTags, makeMockDocs, makeMockFeeds,
-  makeMockTranslation, apiError, flushMockApi, DEFAULT_THEME,
+  makeMockUsers, makeMockNotify, makeMockTranslation, apiError, flushMockApi, DEFAULT_THEME,
 } from '@mosaicast/plugin-sdk/testing';
 
 const ctx = makeMockCtx({
   scope: { type: 'episode', id: 'ep-1' },
-  user: { id: 'u1', role: 'fan' },
+  user: { id: 'u1', role: 'fan', displayName: 'Ana', avatarUrl: '/api/users/u1/avatar' },  // all four required — see below
   apiResponses: { 'data/episode/ep-1/leaderboard': { rows: [] } },
 });
 // …mount, then:
@@ -143,14 +161,21 @@ expect(ctx.api.calls).toContainEqual({ method: 'get', path: 'data/episode/ep-1/l
 expect(ctx.logs).toEqual([]);
 ```
 
+**`user` does not merge like `route` does — supplying it means supplying all four fields.** Since 0.13.0
+`ctx.user` carries `displayName`/`avatarUrl` alongside `id`/`role`, and `MockCtxOverrides` replaces `user`
+wholesale rather than merging it. A signed-in `user` override written against an older skill example
+(`{ id, role }` only) now fails `tsc --noEmit`, silently, with no test-runner failure — the same trap every
+`ctx` member gain has sprung since 0.7.0.
+
 `MockPluginContext` = `PluginContext` + `api.calls` / `api.responses` + `logs` + `navigations`. Defaults:
-site scope with id `main`, no episodes, anonymous user, **real** `docs`/`feeds` doubles (every plugin has a
-doc store and can read snapshots — there is no "declared it or not" case for these two), **`tags: null`**,
-**`schema: null`**, **`blobs: null`**, **`translation: null`**, `locale.available()`/`.content()` →
-English-only, empty filter, player at 0s, empty route, `en`, `progress → null`, `DEFAULT_THEME`, and a
-consent double that **denies everything except `necessary`**. `episodeLabels` is absent; `tags`, `schema`,
-`blobs` and `translation` are all `null` on the same argument: a component written against a value that is
-always there never handles the case where it is not, and most plugins declare none of the three manifest
+site scope with id `main`, no episodes, anonymous user (`null`), **real** `docs`/`feeds` doubles (every
+plugin has a doc store and can read snapshots — there is no "declared it or not" case for these two),
+**`tags: null`**, **`users: null`**, **`notify: null`**, **`schema: null`**, **`blobs: null`**,
+**`translation: null`**, `locale.available()`/`.content()` → English-only, empty filter, player at 0s, empty
+route, `en`, `progress → null`, `DEFAULT_THEME`, and a consent double that **denies everything except
+`necessary`**. `episodeLabels` is absent; `tags`, `users`, `notify`, `schema`, `blobs` and `translation` are
+all `null` on the same argument: a component written against a value that is always there never handles the
+case where it is not, and most plugins declare none of the five manifest
 blocks that turn them non-`null`.
 
 ### `apiError(status, problem?)` and `flushMockApi(client)` (0.9.0)
@@ -228,6 +253,42 @@ passed, and `untagEpisode` only ever removes this plugin's own row, so a tag see
 survives your call — same as production. Canonicalisation (trim, collapse whitespace, casefold) is applied
 the way the host applies it, so a test writing `'Maritime '` and reading `'maritime'` passes here for the
 same reason it passes against core.
+
+### `makeMockUsers(seed)` (0.13.0)
+
+```ts
+const users = makeMockUsers({ 'u-1': 'Ana', 'u-2': { displayName: 'Bo', role: 'podcaster' } });
+const ctx = makeMockCtx({ users });
+
+const found = await users.resolve(['u-1', 'u-gone']);   // length 1 — not index-aligned with the ask
+expect(found[0]).toMatchObject({ displayName: 'Ana', avatarUrl: '/api/users/u-1/avatar' });
+```
+
+Models absence the way the host does: an id with no seeded entry is simply missing from the resolved array
+— not `undefined` in it, not a placeholder — which is the one behaviour a permissive double would hide
+until a leaderboard renders `undefined` the first time somebody deletes their account. `avatarUrl` is
+**derived**, always `/api/users/{id}/avatar`, never accepted as an option — a test can't assert a shape
+production never produces. `resolved` records every id asked for, in call order. `users.forget(id)` removes
+a seeded entry, for the erased-author case. `ctx.users` defaults to `null` in `makeMockCtx` — test that
+path too, since it is the one most plugins get wrong.
+
+### `makeMockNotify(opts)` (0.14.0)
+
+```ts
+const notify = makeMockNotify({ notifiable: ['u-1'], perUserPerDay: 2 });
+const ctx = makeMockCtx({ notify });
+
+const told = await notify.send(['u-1', 'u-stranger'], { text: { en: 'Bingo resolved' } });
+// told === ['u-1'] — the stranger has no rows, so the host would not have reached them either
+```
+
+Models the **partial send**: only ids in `notifiable` (nobody, by default — the case a component has to
+survive) receive anything, and an ineligible id is simply absent from the resolved array rather than a
+rejection. Two refusals it enforces exactly as the host does: a `text` with no `en` entry rejects with a
+400 **before** anything is "delivered" (matching the client's own pre-flight, not just the host's), and
+once `perUserPerDay` is armed, a recipient over their cap rejects the whole call with a 429 (`apiError(429,
+…)`, same as the real client throws). `delivered` / `messagesFor(userId)` are the assertion surface.
+`ctx.notify` defaults to `null` in `makeMockCtx`.
 
 ### `makeMockTranslation(opts)` (0.10.0)
 
@@ -336,6 +397,18 @@ fails to load, loudly) — catch an accidental `anonymous` floor on a metered ca
 ```ts
 it('does not open translation to anonymous visitors', () => {
   expect(manifest.external?.usedBy ?? 'podcaster').not.toBe('anonymous');
+});
+```
+
+If you declare `identity` or `notifications`, the useful guard runs the **other** direction from `tags`:
+core has no `validate*()` for either block, so `"identity": {}` and `"notifications": {}` both silently
+grant the capability (the single flag on each defaults to `true` when merely absent, not `false`) — nothing
+catches a block left behind by accident the way an empty `tags` block would be rejected at load:
+
+```ts
+it('declares identity/notifications only where the code actually uses them', () => {
+  expect(!!manifest.identity).toBe(usesCtxUsers);        // set by hand or via a static check of your source
+  expect(!!manifest.notifications).toBe(usesCtxNotifier);
 });
 ```
 
