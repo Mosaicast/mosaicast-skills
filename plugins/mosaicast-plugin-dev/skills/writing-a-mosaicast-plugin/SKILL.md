@@ -28,8 +28,10 @@ testImplementation("dev.mosaicast:plugin-testkit:0.15.0")
 ```
 
 Both halves of `0.15.0` are published on npm and GitHub Packages — no `mavenLocal()` workaround needed.
-**The git tag is `0.15.0`, not `v0.15.0`** — every other SDK release follows `v<version>`, and this one
-release doesn't; `git checkout v0.15.0` 404s. Maven is GitHub Packages
+**The release originally shipped tagged `0.15.0`, breaking the SDK's `v<version>` convention** — a
+`v0.15.0` tag now exists too (added after the fact, same commit), so `git checkout v0.15.0` and `git
+checkout 0.15.0` both work; a script or doc built before the fix may still assume only the bare form.
+Maven is GitHub Packages
 (`https://maven.pkg.github.com/Mosaicast/mosaicast-plugin-sdk`), which needs a PAT with `read:packages`
 **even for public reads**. Jackson is **3.2.2** (`tools.jackson.*`), not `com.fasterxml`. **Pin the same
 string in all four places** — the CI drift guard and the manifest contract test both compare them.

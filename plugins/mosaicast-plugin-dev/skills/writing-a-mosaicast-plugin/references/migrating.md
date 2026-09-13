@@ -1,7 +1,8 @@
 # Migrating an existing plugin up to 0.15.0
 
-The SDK's own `MIGRATION.md` (in the `mosaicast-plugin-sdk` checkout, or `0.15.0/MIGRATION.md` on GitHub —
-this one release's git tag has no `v` prefix, unlike every other) is the authoritative checklist for the
+The SDK's own `MIGRATION.md` (in the `mosaicast-plugin-sdk` checkout, or `v0.15.0/MIGRATION.md` on GitHub —
+this release originally shipped tagged only `0.15.0`, without the `v` every other release has; a `v0.15.0`
+tag was since added on the same commit, so both forms resolve now) is the authoritative checklist for the
 **SDK** half of each step — read it, it is short and version-scoped. This file adds two things that doc
 does not: the **core-side** changes each release shipped alongside it, and one file walking the **whole
 chain** for a plugin that has not moved since 0.8.0.

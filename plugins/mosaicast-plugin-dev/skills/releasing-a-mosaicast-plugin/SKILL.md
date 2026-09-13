@@ -76,11 +76,12 @@ future SDK version you need is on master but **untagged**, resolve it from a loc
 `includeBuild("../mosaicast-plugin-sdk")`. Do not ship a release built that way without confirming the
 artifact is public first, or nobody else can rebuild it.
 
-**The SDK's 0.15.0 git tag breaks its own `v<version>` convention** — it is `0.15.0`, not `v0.15.0` (every
-other release, `v0.14.0` down to `v0.1.0`, has the prefix). This doesn't affect npm/GitHub Packages, which
-publish off `package.json`/`build.gradle.kts` rather than the tag, so the artifact resolves normally —
-but `git checkout v0.15.0` or a script assuming the `v` prefix will fail to find it. Use
-`git checkout 0.15.0`, or resolve by commit.
+**The SDK's 0.15.0 release originally shipped tagged only `0.15.0`, breaking its own `v<version>`
+convention** (every other release, `v0.14.0` down to `v0.1.0`, has the prefix). Never affected npm/GitHub
+Packages, which publish off `package.json`/`build.gradle.kts` rather than the tag. `v0.15.0` was since added
+as a second tag on the same commit, so both `git checkout v0.15.0` and `git checkout 0.15.0` resolve —
+but don't assume every future release gets this treatment; check the tag actually exists before a script
+assumes the `v` prefix.
 
 ## Install and verify
 
