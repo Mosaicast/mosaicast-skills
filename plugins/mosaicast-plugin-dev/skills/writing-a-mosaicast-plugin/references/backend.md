@@ -18,7 +18,8 @@ Locales locales();                                // never null — the site's l
 Translation translation();                        // null unless external.kinds declares "translation" AND
                                                    // an admin configured a provider (0.10.0; gated 0.11.0)
 org.slf4j.Logger logger();                       // already named "plugin.<pluginId>"
-void onSchedule(Duration every, Runnable task);  // ShedLock-wrapped, at most once across instances
+void onSchedule(Duration every, Runnable task);          // fixed period, captured once at register()
+void onSchedule(Supplier<Duration> every, Runnable task); // period RE-READ before every tick (0.15.0)
 ```
 
 **It's `notifier()`, not `notify()`.** ARCHITECTURE §7.4 specifies the latter, and it cannot compile:
@@ -37,8 +38,28 @@ accessor.
 the `plugin.` prefix, so the host cannot attribute it to you or show it in the admin log viewer. The host
 persists `info`+ and surfaces `warn`+ there; a tight loop gets rate-limited, not stored.
 
-`onSchedule` requires a positive period, is fixed-rate on a small shared pool, wraps each tick in a
-try/catch, and is **skipped entirely while the plugin is disabled**.
+Both `onSchedule` overloads are fixed-rate on a small shared pool, wrap each tick in a try/catch, and are
+**skipped entirely while the plugin is disabled**. `onSchedule(Duration, Runnable)` is now a **`default`
+method** delegating to the `Supplier` form — implementing only the old one no longer compiles for a
+hand-rolled `PluginContext` (not that you should be hand-rolling one; see `testing.md`).
+
+**Use the `Supplier` overload whenever the period comes from `ctx.config()`.** The `Duration` form reads
+the value once, during `register()`, and holds it for the life of the process — an operator saves a new
+interval, the admin form reports success, and the plugin runs at the old cadence until the host restarts:
+
+```diff
+- ctx.onSchedule(Duration.ofSeconds(ctx.config().get("ingestIntervalSeconds", Integer.class, 60)), this::ingest);
++ ctx.onSchedule(() -> Duration.ofSeconds(ctx.config().get("ingestIntervalSeconds", Integer.class, 60)), this::ingest);
+```
+
+The host calls the supplier once at registration (validated strictly — a non-positive value here is
+rejected outright) and again **before every tick**, rescheduling when the answer differs — a config change
+takes effect within one old period, not at the next restart. The supplier runs on the scheduler thread, so
+it must be **cheap and side-effect-free**: reading a field or `ctx.config()` is right, querying or blocking
+is not. A supplier returning `null` or a non-positive `Duration`, or one that throws, leaves the task on
+its last valid period rather than dropping it — logged, never silent. The host may clamp a very short
+period to a floor it owns; treat the value you supply as a request, the same as the manifest's other
+numbers. Keep the plain `Duration` overload wherever the cadence is genuinely fixed — it is not deprecated.
 
 ## `Scope`
 

@@ -1,9 +1,10 @@
-# Migrating an existing plugin up to 0.14.0
+# Migrating an existing plugin up to 0.15.0
 
-The SDK's own `MIGRATION.md` (in the `mosaicast-plugin-sdk` checkout, or `v0.14.0/MIGRATION.md` on GitHub)
-is the authoritative checklist for the **SDK** half of each step — read it, it is short and version-scoped.
-This file adds two things that doc does not: the **core-side** changes each release shipped alongside it,
-and one file walking the **whole chain** for a plugin that has not moved since 0.8.0.
+The SDK's own `MIGRATION.md` (in the `mosaicast-plugin-sdk` checkout, or `0.15.0/MIGRATION.md` on GitHub —
+this one release's git tag has no `v` prefix, unlike every other) is the authoritative checklist for the
+**SDK** half of each step — read it, it is short and version-scoped. This file adds two things that doc
+does not: the **core-side** changes each release shipped alongside it, and one file walking the **whole
+chain** for a plugin that has not moved since 0.8.0.
 
 **You have no choice about timing on every step below.** `platformApi` matches `major.minor` **exactly** —
 the moment core runs a new minor, every plugin declaring the old one is rejected at load, reason in the
@@ -23,9 +24,118 @@ first (file storage, `ctx.links`), then start here.
 | 0.11.x → 0.12.0 | Yes (`platformApi`) | No — binary break only, source-compatible via overloads | `OgMeta.locale`, `SitemapUrl.alternates` — hreflang for plugin pages |
 | 0.12.x → 0.13.0 | Yes | Yes — a hand-built `ctx.user` literal in TS tests | `ctx.users`/`identity` — resolving UUIDs to a name + avatar |
 | 0.13.x → 0.14.0 | Yes (`platformApi`) | No — new surface, nothing removed | `ctx.notify`/`ctx.notifier()`/`notifications` — an in-app inbox |
+| 0.14.x → 0.15.0 | Yes (`platformApi`) | Java: only if you implement `PluginContext` yourself | `onSchedule(Supplier<Duration>, …)` — a schedule that follows config; `MosaicastHandle` — a component that survives a new `ctx` |
 
-Do them **in order**; do not skip to 0.14.0 and back-port the manifest fields, because 0.9.0's compile
+Do them **in order**; do not skip to 0.15.0 and back-port the manifest fields, because 0.9.0's compile
 break and 0.10.0's `ctx.translation` addition both have to land first for the later steps to make sense.
+
+---
+
+## 0.14.x → 0.15.0: a schedule that follows config, and a component that survives a new `ctx`
+
+```diff
+  // plugin.json
+- "platformApi": "0.14.0",
++ "platformApi": "0.15.0",
+```
+
+```diff
+- implementation("dev.mosaicast:plugin-api:0.14.0")
++ implementation("dev.mosaicast:plugin-api:0.15.0")
+- "@mosaicast/plugin-sdk": "^0.14.0"
++ "@mosaicast/plugin-sdk": "^0.15.0"
+```
+
+**That is the whole *required* migration.** Nothing was removed or reshaped — `onSchedule` gained an
+overload and a render may return more than it used to, and both old forms mean exactly what they always
+did. Two of the three things this release adds fix bugs your plugin may already have, though, and are
+worth doing even though nothing forces them.
+
+### Fix 1: your configurable interval is lying, if you have one
+
+If your tick rate comes from `ctx.config()`, this is a real bug, not a style preference. The period was
+captured once, during `register()`, and held for the process's life — an operator saves a new value, the
+admin form says it worked, and the plugin runs at the old cadence until the host restarts.
+
+```diff
+- ctx.onSchedule(
+-         Duration.ofSeconds(ctx.config().get("ingestIntervalSeconds", Integer.class, 60)),
+-         this::ingest);
++ ctx.onSchedule(
++         () -> Duration.ofSeconds(ctx.config().get("ingestIntervalSeconds", Integer.class, 60)),
++         this::ingest);
+```
+
+One character of real change. The host re-reads the supplier before every tick and reschedules when it
+differs — a saved config change now takes effect within one old period, not at the next restart. Keep the
+`Duration` overload wherever the cadence is genuinely constant; it is not deprecated. The supplier runs on
+a scheduler thread, so keep it cheap: reading `ctx.config()` or a field is fine, querying or blocking is
+not. A `null`, a non-positive `Duration`, or a throw leaves the task on its last valid period — logged,
+never dropped.
+
+Test it with `FakePluginContext.scheduledPeriods()`, which re-reads every supplier on demand:
+
+```java
+var config = new MapPluginConfig(Map.of("ingestIntervalSeconds", 60));
+var ctx = new FakePluginContext(new InMemoryDocStore(), config, new FakeFeedAccess(Map.of()), null);
+plugin.register(ctx);
+
+config.with("ingestIntervalSeconds", 10);
+assertEquals(List.of(Duration.ofSeconds(10)), ctx.scheduledPeriods());   // fails if you captured a Duration
+```
+
+### Fix 2: your component may be getting destroyed several times a second
+
+Every `ctx` assignment used to run your cleanup, clear `root`, and re-render — which reads as a rare event
+(a consent choice, a language switch) and is not: a host that rebuilds its own context object on every one
+of its renders reassigns `ctx` roughly four times a second during playback, tearing down every plugin
+element on that page at the same rate. Component state, in-flight requests, scroll position and open
+dialogs were lost each time, and every effect behind them re-ran.
+
+```diff
+  defineMosaicastElement({
+    tag: 'bingo-card',
+    render: ({ ctx, root }) => {
+      const app = mountMyFramework(root, ctx);
+-     return () => app.unmount();
++     return { update: (next) => app.setCtx(next), destroy: () => app.unmount() };
+    },
+  });
+```
+
+Return a `MosaicastHandle` and you decide what a new `ctx` means: `update` runs in place (theme variables
+already refreshed, `root` untouched), `destroy` fires only on a real disconnect. Returning a bare cleanup
+callback still behaves exactly as before — a static card needs no change. An **identical** context object
+is ignored either way, and an element **moved** in the DOM now renders again on reconnect instead of
+staying dead. Delete a module-level cache you built to survive the remount storm — measure first.
+
+**Worth checking before you assume this bug still bites**: `mosaicast-core` 0.7.2 already memoizes the
+context object it hands plugins (`PluginMount.tsx`, `useMemo`), and the player-time reader inside it is a
+stable `useCallback(..., [])`. The four-times-a-second churn the SDK's own example is written against is
+fixed on this host as of this release. `MosaicastHandle` is still worth adopting — a slower host tick or a
+future core change can still reassign `ctx` — but don't spend time chasing this specific symptom against a
+current core if your component still loses state; look elsewhere first.
+
+### Also new: your config fields can say what they are (optional, typing only)
+
+```diff
+  config: {
+    ingestIntervalSeconds: {
+      type: 'number', default: 60, editableBy: 'podcaster',
++     label: { en: 'Ingest interval', de: 'Abrufintervall' },
++     description: { en: 'Seconds between two ingest runs.', de: 'Sekunden zwischen zwei Läufen.' },
+    },
++   matchMode: {
++     type: 'string', default: 'fuzzy',
++     options: [{ value: 'fuzzy', label: 'Fuzzy' }, { value: 'exact', label: 'Exact' }],
++   },
+  },
+```
+
+Plugins may not build their own config UI, so without `label` the generic admin form shows an operator the
+raw key and nothing else. **`options` is not new host behavior** — core has validated a closed set since it
+shipped; the SDK's own TS type was simply behind, so a plugin already declaring an older `platformApi` and
+using `options` was already checked this way.
 
 ---
 
