@@ -4,11 +4,11 @@ Required by every repo's `docs/BRIEF.md` DoD (ARCHITECTURE §13.5). No core, no 
 
 ## Backend — `dev.mosaicast.plugin.testkit.*`
 
-`testImplementation("dev.mosaicast:plugin-testkit:0.14.0")`
+`testImplementation("dev.mosaicast:plugin-testkit:0.15.0")`
 
 | Fake | Notes |
 |---|---|
-| `FakePluginContext` | `store()` narrows to `InMemoryDocStore` and `logger()` to `RecordingLogger`, so no casts. `onSchedule` runs the task **synchronously and immediately**; `scheduledCount()` counts registrations. `withTags(Tags)` / `withLocales(Locales)` / `withTranslation(Translation)` / `withUsers(Users)` (0.13.0) / `withNotifier(Notifier)` (0.14.0) are **chaining mutators**, not constructor parameters — the constructor list stopped growing at five arguments (`store, config, feeds, schema[, blobs]`) on purpose (0.9.0). |
+| `FakePluginContext` | `store()` narrows to `InMemoryDocStore` and `logger()` to `RecordingLogger`, so no casts. `onSchedule` runs the task **synchronously and immediately** (both overloads — the `Supplier` form's value is read once, validated positive, then the task runs); `scheduledCount()` counts registrations, `scheduledPeriods()` (0.15.0) **re-reads every supplier now** — the assertion that catches a period captured once instead of read live — and `runScheduled()` (0.15.0) ticks every registered task again, for the second-pass case. `withTags(Tags)` / `withLocales(Locales)` / `withTranslation(Translation)` / `withUsers(Users)` (0.13.0) / `withNotifier(Notifier)` (0.14.0) are **chaining mutators**, not constructor parameters — the constructor list stopped growing at five arguments (`store, config, feeds, schema[, blobs]`) on purpose (0.9.0). |
 | `InMemoryDocStore` | `asUser(uuid)`, `docsOf(uuid)`, `withBackendOwned(...)`. Optional `ObjectMapper` ctor — Jackson 3, so `JsonMapper.builder().build()`. |
 | `FakeSchemaStore` | `new FakeSchemaStore(ns).withEntity("page", "slug", "title").withFulltext("page", "markdown")` — enforces the same declaration the host does. |
 | `InMemoryPluginBlobs` | `withLimits(maxFile, quota)`, `withMimeTypes(Set.of(…))`, `rejectContent("bad.png")`, plus `usedBytes()` / `size()` / `bytesOf(ref)`. Refuses what the host refuses. |
@@ -139,6 +139,17 @@ assertTrue(routes.failures().isEmpty());
 var sitemap = new SitemapProviderHarness("wiki", new WikiSitemap(pages)).collect();
 assertTrue(sitemap.problems().isEmpty());                        // nothing dropped or contradicted
 assertEquals(List.of("de", "en"), sitemap.locales("/p/wiki/article"));
+```
+
+```java
+// Catches the 0.15.0-era bug: a period captured once instead of read live from config.
+var config = new MapPluginConfig(Map.of("ingestIntervalSeconds", 60));
+var ctx = new FakePluginContext(new InMemoryDocStore(), config, new FakeFeedAccess(Map.of()), null);
+plugin.register(ctx);
+
+config.with("ingestIntervalSeconds", 10);
+assertEquals(List.of(Duration.ofSeconds(10)), ctx.scheduledPeriods());  // fails if the plugin captured a Duration
+ctx.runScheduled();                                                    // a second tick, without waiting
 ```
 
 ## Frontend — `@mosaicast/plugin-sdk/testing`

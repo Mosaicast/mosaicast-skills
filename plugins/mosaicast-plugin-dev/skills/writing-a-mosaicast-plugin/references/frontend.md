@@ -12,9 +12,46 @@ defineMosaicastElement({
 });
 ```
 
-Re-assigning `ctx` re-renders, running the cleanup your previous render returned. Defining a tag that is
-already defined is a no-op. Bundle as an ES library with **no externals** — the SDK and your framework must
-be bundled so you never collide with the host's own copies.
+Defining a tag that is already defined is a no-op. Bundle as an ES library with **no externals** — the SDK
+and your framework must be bundled so you never collide with the host's own copies.
+
+**Re-assigning `ctx` no longer means "destroy and rebuild" unless your render returns a bare cleanup
+callback (0.15.0).** That default still holds — cleanup runs, `root` is cleared, `render` is called again —
+and a static component needs to change nothing. But a host that rebuilds its own context object on every
+one of its renders reassigns `ctx` roughly **four times a second during playback**, and every reassignment
+under the old rule tore a stateful component down: lost input, lost scroll position, a dialog slammed shut,
+every in-flight request re-fired. Return a `MosaicastHandle` instead and you decide what a new `ctx` costs:
+
+```ts
+import { defineMosaicastElement, type MosaicastHandle } from '@mosaicast/plugin-sdk';
+
+defineMosaicastElement({
+  tag: 'bingo-card',
+  render: ({ ctx, root }): MosaicastHandle => {
+    const app = mountMyFramework(root, ctx);
+    return { update: (next) => app.setCtx(next), destroy: () => app.unmount() };
+  },
+});
+```
+
+```ts
+interface MosaicastHandle {
+  update?(ctx: PluginContext): void;   // called in place of a re-render; root and its DOM are untouched
+  destroy?(): void;                    // real teardown — a disconnect, or a re-render with no `update`
+}
+```
+
+- **`update` runs with the SDK's own bookkeeping already done** — the `--mc-*` theme variables are
+  refreshed before it's called, so you don't have to.
+- **An identical `ctx` object is ignored either way**, `update` present or not — you never have to diff a
+  context yourself to protect a component from a churning host.
+- **A DOM move (disconnect immediately followed by reconnect) no longer leaves the element dead.** Before,
+  a move tore the render down and left it waiting for a *different* context object that might never come;
+  now a reconnect renders again.
+- **Returning a cleanup callback still means exactly what it always did** — no behavior changes for a
+  component that ignores this entirely, so upgrading costs nothing unless you opt in.
+- **If you built a module-level cache to survive the remount storm, this is the release to delete it —
+  measure first**, since the storm itself is what `update` exists to stop.
 
 ## `ctx` — the typed surface
 
@@ -63,13 +100,22 @@ SDK reads `plugin.json`.
 
 ## What the host actually supplies today
 
-Verified against core's `frontend/src/plugins/buildCtx.ts` at 0.7.0 — assume this until core says
-otherwise. **`docs`, `feeds`, `tags`, `users`, `notify`, `schema`, `blobs`, `translation`,
+Verified against core's `frontend/src/plugins/buildCtx.ts` and `PluginMount.tsx` at 0.7.2 — assume this
+until core says otherwise. **`docs`, `feeds`, `tags`, `users`, `notify`, `schema`, `blobs`, `translation`,
 `locale.available/content` and `consent.has/granted/request` are real, wired implementations** — the
 "contract ahead of implementation" gap 0.9.0 shipped with has closed for all of them.
 
+**The 4×/s `ctx` churn `MosaicastHandle` (0.15.0) exists to survive is itself already fixed on the host
+side, as of 0.7.2.** `PluginMount.tsx` wraps `buildCtx(...)` in `useMemo`, and the player-time reader in its
+dependency array (`playerCurrentTime`) is itself a `useCallback(() => playerRef.current.currentTime, [])` —
+a stable reference reading a ref, not a value that changes every render. The SDK's own migration guide
+hedges this as "independent of this release, can land before it"; it has landed. That doesn't make
+`MosaicastHandle` optional — a slower host tick, another plugin's re-render, or a future core change can
+still reassign `ctx` more than "never" — but a component you're debugging today for state loss on this host
+is not hitting the four-times-a-second case the SDK's example was written against.
+
 - **`ctx.episode` is not populated.** Never branch on `episode?.status`; if you need publication state, it is
-  not available client-side. Still true at 0.7.0 — this is the one field the shell has never wired.
+  not available client-side. Still true at 0.7.2 — this is the one field the shell has never wired.
 - **`filter.current()` always returns `{}`**, and **`filter.onChange`, `player.on`, `route.onChange` and
   `locale.onChange` return no-op unsubscribes that never fire.** `consent.onChange` and `route.navigate` are
   the live ones. This is unchanged since the 0.8.0-era skill and is worth re-checking on every bump, since

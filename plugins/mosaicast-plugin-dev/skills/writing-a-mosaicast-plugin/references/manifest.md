@@ -13,7 +13,7 @@ rejected.
 {
   "id": "sample",
   "version": "2.9.0",
-  "platformApi": "0.14.0",
+  "platformApi": "0.15.0",
   "name": "Sample",
   "license": "Apache-2.0",
   "author": "The Mosaicast Authors",
@@ -44,8 +44,8 @@ rejected.
 ## `platformApi`
 
 Exact `major.minor` match against the host's `PlatformApi.VERSION`; patch is free. Pre-1.0 the *minor*
-carries breaking changes, so `0.13.x` against a 0.14.x host is rejected, and `"1.x"` fails to parse at all.
-`"0.14"` and `"0.14.0"` both pass against a 0.14.x host — but keep the string identical to the SDK version
+carries breaking changes, so `0.14.x` against a 0.15.x host is rejected, and `"1.x"` fails to parse at all.
+`"0.15"` and `"0.15.0"` both pass against a 0.15.x host — but keep the string identical to the SDK version
 your code builds against, because the contract test and the CI drift guard compare them literally.
 
 ## `slots[]`
@@ -429,12 +429,38 @@ contract move at all.
 ## `config`
 
 ```json
-"config": { "refreshIntervalMinutes": { "type": "number", "default": 30, "editableBy": "podcaster" } }
+"config": {
+  "refreshIntervalMinutes": {
+    "type": "number", "default": 30, "editableBy": "podcaster",
+    "label": { "en": "Ingest interval", "de": "Abrufintervall" },
+    "description": "Minutes between two ingest runs."
+  },
+  "matchMode": {
+    "type": "string", "default": "fuzzy",
+    "options": [{ "value": "fuzzy", "label": "Fuzzy" }, { "value": "exact", "label": "Exact" }]
+  }
+}
 ```
 
 Types `string | number | boolean` only; `default` must match the declared type; `editableBy` ∈
 `admin` (default) | `podcaster`. The admin form is **generated** — plugins never ship config UI. A value the
 caller may not edit is redacted in the read-back too. A JSON `null` clears an override.
+
+- **`label` / `description`** — a plain string (one language) or a locale-code map (`{"en": "…", "de":
+  "…"}`), resolved by the host down the chain the shell always uses: exact locale → base language (`de-AT`
+  finds `de`) → `en` → any entry present. **Without `label` the generic form shows the operator the raw
+  key** (`refreshIntervalMinutes`) and nothing else — plugins never get their own config UI, so this is the
+  only chance to say what a setting is. Rejected at load only for *shape* — neither a string nor an object —
+  never for content: a label the host cannot read is cosmetic, and refusing to load a whole plugin over one
+  would be worse than showing the key.
+- **`options`** — `[{ "value": …, "label"? }]`, declaring a closed set; the field renders as a select and
+  refuses anything outside it, both for the manifest's own `default` (checked at load) and for an operator's
+  override (checked at write time). `value` must match the field's declared `type` — a `string` field with
+  a numeric option value is rejected at load, as is a `default` that isn't one of the declared options. This
+  is not a new host behavior tied to a `platformApi` bump — **core has validated `options` since it
+  shipped**; the SDK's own TS type (`PluginConfigOption`, `LocalizedText`) was simply behind until 0.15.0,
+  so a plugin declaring an older `platformApi` and using `options` was already validated this way without
+  the SDK telling its author the shape.
 
 ## `consent`
 
@@ -480,8 +506,9 @@ A **service-level** declaration. The legacy `{ categories, externalSources }` sh
 `nav` entry is **never** a rejection reason, it just fails to render · **nothing under `identity` or
 `notifications` is ever a rejection reason** — neither block has a `validate*()` method, so any shape
 (including one that inverts the field to `false`, or one that is simply `{}`) loads without error ·
-`config field '%s' has unknown type/unknown editableBy/default
-does not match declared type` · `consent must declare services[]` (plus missing `name`, missing `category`,
+`config field '%s' has unknown type/unknown editableBy/has a label or description that is neither a string
+nor a locale object/has an option with no value/has an option that is not a <type>/default does not match
+declared type/default is not one of its options` · `consent must declare services[]` (plus missing `name`, missing `category`,
 bad category token, blank or scheme-less host, bad wildcard, unparsable origin, storage item without a name,
 `*` as a storage name) · every schema resolution failure above · folder name ≠ manifest `id` ·
 `cannot read plugin.json`.
