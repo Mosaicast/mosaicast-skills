@@ -65,6 +65,7 @@ user: { id: string; role: 'admin'|'podcaster'|'fan';                // null = an
 api: PluginApiClient                                            // /api/plugins/<id>/*, auth attached; typed errors
 docs: DocClient                                                  // never null — typed doc-store client (0.9.0)
 feeds: FeedsClient                                               // never null — episode display snapshots (0.9.0)
+sanitize(html: string | null | undefined): string                // never null — the host's HTML policy (0.16.0)
 tags: TagsClient | null                                          // null unless the manifest declares `tags` (0.9.0)
 users: UserDirectory | null                                      // null unless the manifest declares `identity` (0.13.0)
 notify: NotifyClient | null                                      // null unless the manifest declares `notifications` (0.14.0)
@@ -146,7 +147,8 @@ You do not author backend routes. `ctx.api` is the **doc store's** surface — t
 store have their own, below — and the host exposes exactly:
 
 ```
-GET    data/{scopeType}/{scopeId}/{key}
+GET    data/{scopeType}/{scopeId}/{key}                           → the doc, or 204 when not set (core 0.7.4)
+GET    data/{scopeType}?ids=a,b&keys=x,y                          → { a: { x: … }, b: {} } — ≤100 ids, ≤100 keys
 PUT    data/{scopeType}/{scopeId}/{key}          body = raw JSON  → 204
 DELETE data/{scopeType}/{scopeId}/{key}                           → 204, idempotent
 GET    data/{scopeType}/{scopeId}?prefix=&page=&size=             → PagedDocs<T> { items, page, size, totalElements, totalPages }
@@ -156,7 +158,8 @@ GET    data/{scopeType}/{scopeId}?prefix=&page=&size=             → PagedDocs<
 **max 200**. Keys must match `^[A-Za-z0-9._:-]{1,200}$`. Scope ids are slugs — `encodeURIComponent` every
 path segment you interpolate.
 
-Status codes worth handling: **404** unknown or **disabled** plugin, unknown scope, or a missing document ·
+Status codes worth handling: **204** the key is simply not set (it was a 404 before core 0.7.4 / SDK 0.16.0) ·
+**404** unknown or **disabled** plugin, or unknown scope — a *wrong address* now, never "not set" ·
 **400** a `user` id other than `me`, or an illegal key · **401** `user/me` while anonymous · **403** below the
 manifest's read/write floor · **403 `problems/backend-owned-key`** on a key the manifest reserves for the
 backend · **429** on the log endpoint only.
@@ -189,8 +192,9 @@ try {
 Use `isPluginApiError`, never `instanceof` — the error crosses a bundle boundary from the host, so it is not
 guaranteed to share a constructor with anything in your bundle.
 
-`ctx.api.get` still rejects on a 404, which is the normal answer for a document nobody has written yet.
-**`ctx.api.getOrNull<T>(path)`** resolves `null` on a 404 instead, so the reflexive
+For a document nobody has written yet the host now answers **204**, and raw `ctx.api.get` resolves
+`undefined` for it (before 0.16.0 it rejected with a 404). **`ctx.api.getOrNull<T>(path)`** resolves `null`
+for both the 204 and a 404, so the reflexive
 `.catch(() => undefined)` — which also swallows the 500, the 403 and a network failure — stops being
 necessary:
 
@@ -206,6 +210,8 @@ shorthands done for you. Never `null` — every plugin has a doc store.
 
 ```ts
 get<T>(target: DocTarget, key: string): Promise<T | null>       // null on absence, never a rejection
+getMany<T>(type: Scope['type'], ids: string[], keys: string[])  // 0.16.0 — one request for a page of cards
+  : Promise<Record<string, Record<string, T>>>                   //   misses absent; split over 100 for you
 put<T>(target: DocTarget, key: string, value: T): Promise<void>
 list<T>(target: DocTarget, { prefix?, page?, size? }): Promise<PagedDocs<T>>
 remove(target: DocTarget, key: string): Promise<void>
@@ -223,6 +229,18 @@ A key failing `DOC_KEY_PATTERN` **throws synchronously at the call site**, with 
 instead of costing a round trip you then read a 400 body to explain. Everything else — the floors,
 `backendOwned`, the 400 on an unknown scope, the 401 on an anonymous `user` request — is unchanged and still
 the host's to enforce; `ctx.api` remains the escape hatch for anything `ctx.docs` does not cover.
+
+**What the client remembers for you — guaranteed since 0.16.0**, per plugin and signed-in identity, for the
+life of the page: identical `get`s in flight share one request; a miss (the 204) is remembered, `getMany`
+misses included; your own `put`/`remove` forget the address they touched; **hits are never cached**; errors
+are never remembered. So **delete any miss cache you wrote around `ctx.docs`** — it is redundant — and keep a
+hit cache, if at all, no longer than a render: it hides writes made in other sessions. Before this, 98% of one
+real session's plugin requests were "not set", one key asked 178 times.
+
+```ts
+const docs = await ctx.docs.getMany<Highlight>('episode', ctx.episodes.slice(0, 20), ['highlight']);
+for (const slug of ctx.episodes) render(slug, docs[slug]?.highlight ?? null);
+```
 
 ### `ctx.feeds` — episode display snapshots (0.9.0)
 
@@ -249,6 +267,31 @@ feed refetch — that propagation is the reason to call `ctx.feeds` per render i
 your own doc store on a schedule, which is the pattern this surface exists to retire. A missing key in
 `displayMany`'s answer must be treated as "not shown to this visitor," never as a failure — it cannot be
 used to enumerate episodes `ctx.episodes` did not already hand you.
+
+**`description` is untrusted third-party HTML** — the feed's show notes verbatim, unsanitized by the host.
+Never assign it to `innerHTML`. Show **`descriptionText`** (0.16.0, plain text, never absent) on a card or a
+teaser; if you really need the markup, `ctx.sanitize(snap.description)`. Rendering `description` as React
+text is the other bug: it prints the tags.
+
+### `ctx.sanitize` — HTML you did not write (0.16.0)
+
+```ts
+notes.innerHTML = ctx.sanitize(snap.description);          // show notes
+page.innerHTML  = ctx.sanitize(marked.parse(markdown));    // a podcaster's Markdown — AFTER rendering
+```
+
+The host's own feed-HTML policy (exported as `FEED_HTML_POLICY`): prose, links, lists, tables, images; drops
+`<style>`, `<script>`, `<iframe>`, forms, every `style`/`srcset`/event-handler attribute and `javascript:`/
+`data:` links; external links get `target="_blank" rel="noopener noreferrer nofollow ugc"`. Synchronous,
+never `null`, no declaration.
+
+**Never `DOMPurify.sanitize(html)` with defaults.** They stop scripts but allow `<style>` and `style=`, and
+the contract requires `style-src 'unsafe-inline'` — so a stylesheet in someone else's HTML becomes a
+full-viewport click-jacking overlay or attribute-selector CSS that leaks form values. Both the wiki and the
+sample shipped exactly this. It also strips `class` and `data-*`: if **your own** generated markup needs them
+(the wiki's link tokens do), replace it with nonce placeholder words before parsing, sanitize, then restore
+your elements **into text nodes only** — see `mosaicast-plugin-wiki`'s `markdown.ts`. Test with
+`sanitizeLikeHost` from `/testing` (needs jsdom).
 
 ### `ctx.tags` — the site's shared vocabulary (0.9.0)
 
@@ -289,7 +332,7 @@ merely discourages it: delete a tag from the vocabulary, rename one, or remove a
 
 ### `ctx.users` — turning UUIDs into people (0.13.0)
 
-`null` unless the manifest declares an `identity` block. Fixes what `queryAcrossUsers`-built aggregates
+`null` unless the manifest declares an `identity` block. Fixes what `allUsers()`-built aggregates
 couldn't do: a leaderboard has ids and documents, and no way to draw a person.
 
 ```ts
@@ -424,7 +467,7 @@ await ctx.api.put(`data/user/${SELF_SCOPE_ID}/mark:${ctx.scope.id}:b3`, { marked
 *and* entity — so the entity goes in the key. `DataScopeType` (`Scope['type'] | 'user'`) is a separate type
 from `Scope` on purpose: `user` addresses storage, never a slot, and never appears in `ctx.scope`.
 
-There is no TS counterpart to `queryAcrossUsers`, deliberately. Build leaderboards on the backend and read
+There is no TS counterpart to the backend's `ctx.allUsers()` (declared as `data.readsAllUsers`), deliberately. Build leaderboards on the backend and read
 the precomputed result from an entity scope.
 
 **Migrating a plugin that stored per-user keys under entity scopes:** the backend can read legacy keys but
@@ -622,7 +665,13 @@ reference `var(--mc-*)`:
 ```
 bg→--mc-bg          surface→--mc-surface   text→--mc-text            textMuted→--mc-text-muted
 accent→--mc-accent  accentContrast→--mc-accent-contrast              accent2→--mc-accent-2   border→--mc-border
+accentText→--mc-accent-text   (0.16.0; optional in ctx.theme, always on :root from core)
 ```
+
+**Text, links and focus rings use `--mc-accent-text`; `--mc-accent` is for fills only**, paired with
+`--mc-accent-contrast`. The accent is the admin's unchecked seed — a pale one measured 1.12:1 as link text;
+`--mc-accent-text` is the same colour clamped to WCAG AA against both `--mc-bg` and `--mc-surface`. A quick
+audit: every `color: var(--mc-accent)` and `outline: … var(--mc-accent)` in your CSS is a bug.
 
 ### `--mc-icon-*` — the shell's icon set (core 0.6.15)
 

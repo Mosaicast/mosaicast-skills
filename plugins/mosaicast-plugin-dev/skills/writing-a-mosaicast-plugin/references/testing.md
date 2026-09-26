@@ -4,12 +4,12 @@ Required by every repo's `docs/BRIEF.md` DoD (ARCHITECTURE §13.5). No core, no 
 
 ## Backend — `dev.mosaicast.plugin.testkit.*`
 
-`testImplementation("dev.mosaicast:plugin-testkit:0.15.0")`
+`testImplementation("dev.mosaicast:plugin-testkit:0.16.0")`
 
 | Fake | Notes |
 |---|---|
-| `FakePluginContext` | `store()` narrows to `InMemoryDocStore` and `logger()` to `RecordingLogger`, so no casts. `onSchedule` runs the task **synchronously and immediately** (both overloads — the `Supplier` form's value is read once, validated positive, then the task runs); `scheduledCount()` counts registrations, `scheduledPeriods()` (0.15.0) **re-reads every supplier now** — the assertion that catches a period captured once instead of read live — and `runScheduled()` (0.15.0) ticks every registered task again, for the second-pass case. `withTags(Tags)` / `withLocales(Locales)` / `withTranslation(Translation)` / `withUsers(Users)` (0.13.0) / `withNotifier(Notifier)` (0.14.0) are **chaining mutators**, not constructor parameters — the constructor list stopped growing at five arguments (`store, config, feeds, schema[, blobs]`) on purpose (0.9.0). |
-| `InMemoryDocStore` | `asUser(uuid)`, `docsOf(uuid)`, `withBackendOwned(...)`. Optional `ObjectMapper` ctor — Jackson 3, so `JsonMapper.builder().build()`. |
+| `FakePluginContext` | `store()` narrows to `InMemoryDocStore` and `logger()` to `RecordingLogger`, so no casts. `onSchedule` runs the task **synchronously and immediately** (both overloads — the `Supplier` form's value is read once, validated positive, then the task runs); `scheduledCount()` counts registrations, `scheduledPeriods()` (0.15.0) **re-reads every supplier now** — the assertion that catches a period captured once instead of read live — and `runScheduled()` (0.15.0) ticks every registered task again, for the second-pass case. `withTags(Tags)` / `withLocales(Locales)` / `withTranslation(Translation)` / `withUsers(Users)` (0.13.0) / `withNotifier(Notifier)` (0.14.0) / `withReadsAllUsers()` (0.16.0) are **chaining mutators**, not constructor parameters — the constructor list stopped growing at five arguments (`store, config, feeds, schema[, blobs]`) on purpose (0.9.0). |
+| `InMemoryDocStore` | `asUser(uuid)`, `docsOf(uuid)`, `withBackendOwned(...)`, `acrossUsers()` (0.16.0 — every user partition, for assertions; always available on the store, whatever the plugin declares). Optional `ObjectMapper` ctor — Jackson 3, so `JsonMapper.builder().build()`. |
 | `FakeSchemaStore` | `new FakeSchemaStore(ns).withEntity("page", "slug", "title").withFulltext("page", "markdown")` — enforces the same declaration the host does. |
 | `InMemoryPluginBlobs` | `withLimits(maxFile, quota)`, `withMimeTypes(Set.of(…))`, `rejectContent("bad.png")`, plus `usedBytes()` / `size()` / `bytesOf(ref)`. Refuses what the host refuses. |
 | `FakeFeedAccess` | `withDisplay(refId, snapshot)`; `display(unknownId)` throws; `episodesIn(Scope.user())` is empty. |
@@ -30,13 +30,13 @@ Required by every repo's `docs/BRIEF.md` DoD (ARCHITECTURE §13.5). No core, no 
 Seed what a frontend would have written, then assert on the aggregate:
 
 ```java
-var ctx = new FakePluginContext();
+var ctx = new FakePluginContext().withReadsAllUsers();  // stands in for data.readsAllUsers (0.16.0)
 ctx.store().asUser(alice).put(Scope.user(), "mark:ep-1:b3", Map.of("marked", true));
 ctx.store().asUser(bob).put(Scope.user(), "mark:ep-1:b3", Map.of("marked", true));
 
 plugin.register(ctx);                                  // onSchedule fires synchronously
 
-assertEquals(2, ctx.store().queryAcrossUsers("mark:").size());
+assertEquals(2, ctx.store().acrossUsers().query("mark:").size());
 assertTrue(ctx.store().get(Scope.episode("ep-1"), "leaderboard", Board.class).isPresent());
 ```
 
@@ -81,8 +81,10 @@ assertThrows(IllegalStateException.class,
 store.asUser(mallory).put(Scope.user(), "mark:ep-1", ok);            // USER is exempt, even under "*"
 ```
 
-A hand-rolled `DocStore` fake must now implement `queryAcrossUsers` — switching to `InMemoryDocStore` is the
-cheaper fix.
+**`FakePluginContext.allUsers()` is `null` until `withReadsAllUsers()`** (0.16.0), as the host's is without
+the declaration — a backend aggregating over users NPEs (or, better, throws your own "manifest no longer
+declares it") in every test that forgot. Migrating: append `.withReadsAllUsers()` to each context. The
+`FakeNotifier`'s eligibility does not depend on it, as the host's does not.
 
 ### Testing `tags`, and the two extension points a request can reach
 
@@ -238,7 +240,14 @@ expect(docs.stored['data/user/me/marks']).toEqual({ b3: true, b4: true });
 
 `makeMockDocs` **validates keys the way the real client does** — a key with a `/` or over 200 characters
 throws here instead of first surfacing as a production 400. `stored` is keyed `"<partition>/<key>"`
-(`docPath('self')` → `data/user/me`, `'site'` → `data/site/main`), directly inspectable.
+(`docPath('self')` → `data/user/me`, `'site'` → `data/site/main`), directly inspectable. Since 0.16.0 it has
+`getMany` and a **`calls`** log (`{ method, partitions, keys }` per call), so a test can assert "one batch,
+not twenty `get`s". A hand-written `DocClient` wrapper needs `getMany` too, or it stops type-checking.
+
+**`makeMockCtx().sanitize` is `sanitizeLikeHost`** (0.16.0) — the host's `FEED_HTML_POLICY` walked over a
+parsed tree, so a test sees the same removals (`<style>`, `style=`, handlers, `javascript:`). Needs jsdom.
+Worth one test per render path of foreign HTML, and check it *fails* with `sanitize: (h) => h` — otherwise it
+proves nothing. `makeMockFeeds` fixtures may omit `descriptionText`; the double derives it.
 
 ```ts
 const feeds = makeMockFeeds().withDisplay('kraken', { title: 'The Kraken', description: '' });

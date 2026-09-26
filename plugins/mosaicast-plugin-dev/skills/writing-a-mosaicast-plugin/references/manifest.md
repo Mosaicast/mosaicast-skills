@@ -12,8 +12,8 @@ rejected.
 ```json
 {
   "id": "sample",
-  "version": "2.9.0",
-  "platformApi": "0.15.0",
+  "version": "2.17.0",
+  "platformApi": "0.16.0",
   "name": "Sample",
   "license": "Apache-2.0",
   "author": "The Mosaicast Authors",
@@ -27,16 +27,20 @@ rejected.
   ],
   "nav": [{ "path": "", "label": "Sample", "icon": "star" }],
   "storage": "doc",
-  "data":   { "readableBy": "anonymous", "writableBy": "podcaster", "backendOwned": ["stats", "agg:*"] },
+  "data":   { "readableBy": "anonymous", "writableBy": "podcaster", "backendOwned": ["stats", "agg:*"], "readsAllUsers": true },
   "blobs":  { "maxFileBytes": 5242880, "quotaBytes": 268435456, "mimeTypes": ["image/png", "image/jpeg"] },
   "tags":   { "readsVocabulary": true, "writesEpisodes": false },
   "external": { "kinds": ["translation"], "usedBy": "podcaster" },
   "identity": { "resolvesUsers": true },
   "notifications": { "sends": true, "perUserPerDay": 5 },
-  "config": { "refreshIntervalMinutes": { "type": "number", "default": 30, "editableBy": "podcaster" } },
-  "consent": { "services": [] }
+  "config": { "refreshIntervalMinutes": { "type": "number", "default": 30, "editableBy": "podcaster", "min": 1, "max": 1440, "step": 1 } },
+  "consent": { "services": [], "categoryLabels": {} }
 }
 ```
+
+**`frontend.entry` has a grammar (enforced by core 0.7.4, documented in SDK 0.16.0):** a relative path under
+the plugin's own `assets/` — `[A-Za-z0-9._-]` segments joined by `/`, no leading `/`, no `.`/`..` segment, no
+`?` or `#`. Anything else is **rejected at load**, not rewritten. `FRONTEND_ENTRY_PATTERN` is the same rule.
 
 `backend.basePath` and `backend.extensions` are **decorative** — nothing reads them. PF4J's generated
 `extensions.idx` decides what loads, which is why `annotationProcessor("org.pf4j:pf4j:…")` is mandatory.
@@ -44,8 +48,8 @@ rejected.
 ## `platformApi`
 
 Exact `major.minor` match against the host's `PlatformApi.VERSION`; patch is free. Pre-1.0 the *minor*
-carries breaking changes, so `0.14.x` against a 0.15.x host is rejected, and `"1.x"` fails to parse at all.
-`"0.15"` and `"0.15.0"` both pass against a 0.15.x host — but keep the string identical to the SDK version
+carries breaking changes, so `0.15.x` against a 0.16.x host is rejected, and `"1.x"` fails to parse at all.
+`"0.16"` and `"0.16.0"` both pass against a 0.16.x host — but keep the string identical to the SDK version
 your code builds against, because the contract test and the CI drift guard compare them literally.
 
 ## `slots[]`
@@ -111,6 +115,15 @@ Neither floor applies to the `USER` scope in either direction: no floor makes so
 readable, none stands between a caller and their own, and `writableBy` does not gate it (it protects the
 *shared* surface). A fan writes `data/user/me/…` under a plugin declaring `writableBy: "podcaster"`.
 Anonymous on a `user` path is a 401 regardless.
+
+### `readsAllUsers` (0.16.0)
+
+`"readsAllUsers": true` is what makes the backend's `ctx.allUsers()` non-`null` — the read of **every**
+user's `USER` partition, owner UUIDs included. Absent means no, like every other capability. It is the one
+read that crosses an ownership boundary, so an operator should see it on the manifest (core shows it on the
+admin plugin page) — "can enumerate everyone who ever used me" is not what the `USER` scope alone implies.
+Until 0.16.0 this was `DocStore.queryAcrossUsers` and every plugin had it. Declare it only for a real
+aggregate (leaderboard, rollup, moderation); the frontend is unaffected either way.
 
 ### `backendOwned` (0.6.0)
 
@@ -333,7 +346,7 @@ navigation chrome.
 ```
 
 **Opt-in and declared, never derived** — the same rule `blobs`, `tags` and `external` follow, even though
-your plugin already *has* the ids (`queryAcrossUsers` hands them over freely). What's being granted here is
+your plugin already *has* the ids (`allUsers().query(...)` hands them over, if you declared `readsAllUsers`). What's being granted here is
 not access to the UUIDs but **turning them into a name and a picture**, and that's the part an operator
 should read off the manifest before installing. Absent ⇒ `ctx.users` / `ctx.users()` are `null` and the
 `GET /api/plugins/<id>/users` endpoint 404s — same shape as `schema`, `blobs`, `tags`.
@@ -378,7 +391,7 @@ should read off the manifest before installing. Absent ⇒ `ctx.users` / `ctx.us
 - **This is the one plugin surface that writes into *another* user's experience.** Everything else a plugin
   touches is its own scope or the current visitor's. Two host-enforced bounds, neither yours to widen:
   - **Eligibility**: you may only notify a user id your plugin already holds `USER`-scope data for — the
-    same partitions `queryAcrossUsers` reads. An ineligible id is silently dropped from `send()`'s return
+    same partitions `allUsers().query(...)` reads (whether or not you declared `readsAllUsers`). An ineligible id is silently dropped from `send()`'s return
     value, never an error; your call never learns *why* one recipient didn't get it.
   - **A batch is capped** at `mosaicast.plugin-notifications.max-batch` (default **200**) — checked against
     the *eligible* count, not the raw list you passed, so asking for 1000 with 150 eligible passes. Over the
@@ -461,6 +474,13 @@ caller may not edit is redacted in the read-back too. A JSON `null` clears an ov
   shipped**; the SDK's own TS type (`PluginConfigOption`, `LocalizedText`) was simply behind until 0.15.0,
   so a plugin declaring an older `platformApi` and using `options` was already validated this way without
   the SDK telling its author the shape.
+- **Bounds (0.16.0, enforced by core 0.7.4)** — `min` / `max` / `step` on a `number` field, `minLength` /
+  `maxLength` on a `string` one. An out-of-range write is **refused with a 400 naming the bound** ("must be at
+  least 1"), never clamped; the admin form renders them as input constraints. At load, a bound on the wrong
+  type, `min > max`, a non-positive `step` or a `default` outside its own bounds is rejected. A value stored
+  *before* a bound existed that now breaks it counts as **unset**, so the default applies — which is what
+  lets you trust `config().get(...)` and drop your own clamp. Declare `"min": 1` on any interval: without it
+  `0` was a legal save that switched scheduled work off. No `pattern` yet (Java vs JS regex dialects).
 
 ## `consent`
 
@@ -479,7 +499,15 @@ A **service-level** declaration. The legacy `{ categories, externalSources }` sh
   consent is granted (it looks like "the embed just doesn't load", not a permissions error).
   `https://*.foo.example` is legal as a leading-label wildcard; a bare `*` is not; a blank host is rejected.
 - `category` must match `[a-z0-9_-]{1,40}` — **no dots**, that is the consent cookie's separator. The host
-  labels `necessary`, `functional`, `analytics`; any other slug is allowed and shown raw.
+  labels `necessary`, `functional`, `analytics`; any other slug is allowed — and since 0.16.0 **you owe it a
+  label** in `consent.categoryLabels` (below). Unlabelled, core 0.7.4 shows it as "Other services: social"
+  with a generic hint; before, the visitor was asked to consent to the bare id.
+- **`categoryLabels` (0.16.0)** — keyed by category id, block-level (not per service, so two services in one
+  category cannot disagree): `{ "social": { "label": { "en": "Sharing buttons", "de": "…" }, "hint": "…" } }`,
+  each a string or a locale map. Rejected at load: a label for a **host** category (`necessary`,
+  `functional`, `analytics`, `unreviewed`), a label for a category none of your services declares, and one
+  with no text. Two plugins labelling the same category: the lowest plugin id wins. Not the pre-0.4
+  `categories` array, which stays rejected.
 - A `necessary` claim needs **admin approval**; unapproved, it is demoted to the pseudo-category
   `unreviewed` and prompted like anything else. Use `necessary` only for what genuinely cannot be refused.
 - The visitor decides per **category**, not per service — two services sharing a category (yours and another
@@ -508,7 +536,11 @@ A **service-level** declaration. The legacy `{ categories, externalSources }` sh
 (including one that inverts the field to `false`, or one that is simply `{}`) loads without error ·
 `config field '%s' has unknown type/unknown editableBy/has a label or description that is neither a string
 nor a locale object/has an option with no value/has an option that is not a <type>/default does not match
-declared type/default is not one of its options` · `consent must declare services[]` (plus missing `name`, missing `category`,
+declared type/default is not one of its options/declares min/max/step, which only a number field takes/
+declares minLength/maxLength, which only a string field takes/has min above max/step must be positive/
+default must be at least …` (0.16.0) · `frontend.entry '…' is not usable` ·
+`consent.categoryLabels cannot relabel the host's own category/labels '…', which none of this plugin's
+consent services declares/'…' has no label text` (0.16.0) · `consent must declare services[]` (plus missing `name`, missing `category`,
 bad category token, blank or scheme-less host, bad wildcard, unparsable origin, storage item without a name,
 `*` as a storage name) · every schema resolution failure above · folder name ≠ manifest `id` ·
 `cannot read plugin.json`.

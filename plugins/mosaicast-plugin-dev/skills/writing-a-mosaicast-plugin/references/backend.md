@@ -12,6 +12,7 @@ PluginBlobs blobs();                             // null unless the manifest dec
 Tags tags();                                     // null unless the manifest declares a tags block (0.9.0)
 Users users();                                    // null unless the manifest declares identity (0.13.0)
 Notifier notifier();                              // null unless the manifest declares notifications (0.14.0)
+CrossUserStore allUsers();                        // null unless data.readsAllUsers: true (0.16.0)
 PluginConfig config();
 FeedAccess feeds();
 Locales locales();                                // never null — the site's languages (0.10.0)
@@ -88,7 +89,7 @@ String BACKEND_OWNED_PATTERN = "^(\\*|[A-Za-z0-9._:-]{1,200}\\*?)$";   // since 
 void            put(Scope scope, String key, Object value);      // last-write-wins
 boolean         delete(Scope scope, String key);                 // idempotent
 List<DocEntry>      query(Scope scope, String keyPrefix);
-List<OwnedDocEntry> queryAcrossUsers(String keyPrefix);          // since 0.5.0
+// queryAcrossUsers(prefix) was here until 0.16.0 — it moved to ctx.allUsers(), see below
 ```
 
 - **Every scoped method throws `UnsupportedOperationException` on a `USER` scope — reads included.** A
@@ -96,18 +97,28 @@ List<OwnedDocEntry> queryAcrossUsers(String keyPrefix);          // since 0.5.0
   by the frontend against `data/user/me/…` and read back by the backend only in aggregate.
 - `put` throws `IllegalArgumentException` on a key violating `KEY_PATTERN`.
 - `DocEntry(String key, JsonNode value)` — `tools.jackson.databind.JsonNode`.
-- **`DocStore` itself has not changed since 0.5.0.** (0.8.0 moved the Java contract only by adding
-  `PluginContext.blobs()`.) `backendOwned` is enforced by the host on the HTTP surface only; your backend
-  keeps writing those keys.
+- **`DocStore` lost `queryAcrossUsers` in 0.16.0** and has otherwise not changed since 0.5.0.
+  `backendOwned` is enforced by the host on the HTTP surface only; your backend keeps writing those keys.
 
-### Aggregates across users
+### Aggregates across users — `ctx.allUsers()`, declared (0.16.0)
 
+```json
+"data": { "writableBy": "fan", "readableBy": "anonymous", "readsAllUsers": true }
+```
 ```java
-List<OwnedDocEntry> marks = ctx.store().queryAcrossUsers("mark:");   // record(UUID userId, String key, JsonNode value)
-ctx.store().put(Scope.episode(slug), "leaderboard", board);          // publish for the frontend to read
+CrossUserStore everyone = ctx.allUsers();                    // null without data.readsAllUsers
+List<OwnedDocEntry> marks = everyone.query("mark:");         // record(UUID userId, String key, JsonNode value)
+ctx.store().put(Scope.episode(slug), "leaderboard", board);  // publish for the frontend to read
 ```
 
-`queryAcrossUsers` is backend-only, read-only and has **no HTTP surface**, so no visitor's request can reach
+**It is a declared capability now.** Reading every user's partition — every account's documents, owner UUIDs
+included — is the one read that crosses an ownership boundary, so since 0.16.0 it is `null` unless the
+manifest says `data.readsAllUsers: true`, the same null-means-not-declared shape as `blobs()`/`users()`/
+`notifier()`, and an operator sees it on the admin plugin page. Until 0.16.0 it was
+`ctx.store().queryAcrossUsers(prefix)` and every plugin had it by existing. If your code depends on it, treat
+`null` as a manifest bug and **throw** — an empty aggregate would publish "nobody did anything" as fact.
+
+`allUsers().query(...)` is backend-only, read-only and has **no HTTP surface**, so no visitor's request can reach
 another's data through it. The `userId` is host-resolved from the partition the doc lives in, never
 client-supplied — that is what makes the aggregate true; a client-reported summary is a summary of whatever
 users typed. `userId` is an identifier, not a display name, and the contract offers no way to turn it into one.
@@ -203,7 +214,13 @@ DisplaySnapshot display(String refId);     // not authoritative — the host ove
 ```
 
 `DisplaySnapshot(title, description, audioUrl, publishedAt, duration, imageUrl, feedImageUrl, author,
-subtitle)` plus `artwork()`, which falls back from episode image to feed image.
+subtitle, descriptionText)` plus `artwork()`, which falls back from episode image to feed image.
+
+- **`description` is the feed's show notes verbatim — untrusted third-party HTML** (documented since 0.16.0).
+  Anything that writes show notes into output — an `OgMeta` description, a `SearchHit` excerpt, a
+  notification — uses **`descriptionText()`** (0.16.0), which the host reduced to plain text. Never `null`.
+- The 9-arg constructor (without `descriptionText`) still compiles, **deprecated for removal**, and leaves
+  it `""`; a fixture that renders description text should use all ten.
 
 ## `Tags` (only when the manifest declares a `tags` block)
 
@@ -239,7 +256,7 @@ record TagInfo(String tag, String label, int episodes, int subjects) {}
 ## `Users` (only when the manifest declares an `identity` block, 0.13.0)
 
 `ctx.users()` is `null` for a plugin declaring no `identity` block — same shape and reasoning as `schema()`
-and `blobs()`. The fix for a `queryAcrossUsers` aggregate: it hands you `OwnedDocEntry(userId, …)`, UUIDs and
+and `blobs()`. The fix for an `allUsers()` aggregate: it hands you `OwnedDocEntry(userId, …)`, UUIDs and
 nothing else, so a leaderboard built from it had no way to draw a person.
 
 ```java
@@ -255,7 +272,7 @@ record UserRef(UUID id, String displayName, String avatarUrl, Role role) {}
   or zero; match on `UserRef.id()`, never on position.
 - **Duplicate ids resolve once; an empty input returns an empty list rather than throwing.**
 - **It resolves, it does not enumerate.** There is no list/search method and never will be — you may ask
-  only about ids you already came by through your own scope (a doc you wrote, a row `queryAcrossUsers`
+  only about ids you already came by through your own scope (a doc you wrote, a row `allUsers().query(...)`
   handed you).
 - **`avatarUrl` is finished and never null.** Always `/api/users/{id}/avatar` (ARCHITECTURE §8.7),
   host-relative — every user has one, generated from the UUID when there's no provider picture, so there is
@@ -293,7 +310,7 @@ record NotifyMessage(Map<String, String> text, String link) {
   ignores the return and works from a stale list notifies nobody while looking perfectly healthy.
 - **Two host-enforced bounds, neither yours to lift:**
   - **Eligibility** — you may only reach a user id your plugin already holds `USER`-scope data for, checked
-    against the same partitions `queryAcrossUsers` spans.
+    against the same partitions `allUsers().query(...)` spans — whether or not you declared `readsAllUsers`.
   - **Rate limits are the host's.** `NotificationException.Reason.RATE_LIMITED` (`retryable()` true) covers
     both the per-recipient daily allowance (`perUserPerDay`: what your manifest *asks*, capped by
     `mosaicast.plugin-notifications.hard-per-user-per-day`, default **20**; the operator's default when you
@@ -438,7 +455,7 @@ immutable: build one with `JsonMapper.builder().build()`, never `new ObjectMappe
 unchecked, so drop `throws JsonProcessingException` and catch-to-satisfy-the-compiler blocks.
 
 `store().get(...)`, `config().get(...)` and every `SchemaStore` read deserialize straight into your own type
-and never hand you a `JsonNode` — **only `query(...)`/`queryAcrossUsers(...)` do.** A plugin that never
+and never hand you a `JsonNode` — **only `query(...)`/`allUsers().query(...)` do.** A plugin that never
 queries has nothing Jackson-shaped to change.
 
 ## Lifecycle
