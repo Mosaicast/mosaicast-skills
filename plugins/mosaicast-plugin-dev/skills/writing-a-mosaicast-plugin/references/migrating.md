@@ -1,8 +1,7 @@
-# Migrating an existing plugin up to 0.15.0
+# Migrating an existing plugin up to 0.16.0
 
-The SDK's own `MIGRATION.md` (in the `mosaicast-plugin-sdk` checkout, or `v0.15.0/MIGRATION.md` on GitHub —
-this release originally shipped tagged only `0.15.0`, without the `v` every other release has; a `v0.15.0`
-tag was since added on the same commit, so both forms resolve now) is the authoritative checklist for the
+The SDK's own `MIGRATION.md` (in the `mosaicast-plugin-sdk` checkout, or `v0.16.0/MIGRATION.md` on GitHub —
+0.15.0 was once tagged only `0.15.0` without the `v`; both forms resolve now) is the authoritative checklist for the
 **SDK** half of each step — read it, it is short and version-scoped. This file adds two things that doc
 does not: the **core-side** changes each release shipped alongside it, and one file walking the **whole
 chain** for a plugin that has not moved since 0.8.0.
@@ -26,9 +25,63 @@ first (file storage, `ctx.links`), then start here.
 | 0.12.x → 0.13.0 | Yes | Yes — a hand-built `ctx.user` literal in TS tests | `ctx.users`/`identity` — resolving UUIDs to a name + avatar |
 | 0.13.x → 0.14.0 | Yes (`platformApi`) | No — new surface, nothing removed | `ctx.notify`/`ctx.notifier()`/`notifications` — an in-app inbox |
 | 0.14.x → 0.15.0 | Yes (`platformApi`) | Java: only if you implement `PluginContext` yourself | `onSchedule(Supplier<Duration>, …)` — a schedule that follows config; `MosaicastHandle` — a component that survives a new `ctx` |
+| 0.15.x → 0.16.0 | Yes (`platformApi`; `data.readsAllUsers` if you aggregate over users) | **Yes — `DocStore.queryAcrossUsers` is gone**; TS: a hand-written `DocClient`/`DisplaySnapshot` literal | `ctx.sanitize`, `descriptionText`, `--mc-accent-text`, config bounds, `consent.categoryLabels`, `ctx.docs.getMany` |
 
-Do them **in order**; do not skip to 0.15.0 and back-port the manifest fields, because 0.9.0's compile
+Do them **in order**; do not skip to 0.16.0 and back-port the manifest fields, because 0.9.0's compile
 break and 0.10.0's `ctx.translation` addition both have to land first for the later steps to make sense.
+
+---
+
+## 0.15.x → 0.16.0: what three test passes found in the contract
+
+Needs **core 0.7.4** (`mosaicast-core` #229) — a 0.16 plugin is rejected by 0.7.2/0.7.3, a 0.15 one by 0.7.4.
+Worked examples: `mosaicast-plugin-sample` 2.17.0 and `mosaicast-plugin-wiki` 0.5.0.
+
+**Required.**
+
+```diff
+- "platformApi": "0.15.0",
++ "platformApi": "0.16.0",
+- compileOnly("dev.mosaicast:plugin-api:0.15.0")      testImplementation("…plugin-testkit:0.15.0")
++ compileOnly("dev.mosaicast:plugin-api:0.16.0")      testImplementation("…plugin-testkit:0.16.0")
+- "@mosaicast/plugin-sdk": "0.15.0"
++ "@mosaicast/plugin-sdk": "0.16.0"
+```
+
+**Required if your backend aggregates over users** — the compiler finds every site:
+
+```diff
+  "data": { "writableBy": "fan", "readableBy": "anonymous",
++           "readsAllUsers": true }
+- for (OwnedDocEntry e : ctx.store().queryAcrossUsers("fav:")) { … }
++ for (OwnedDocEntry e : ctx.allUsers().query("fav:")) { … }     // null without the declaration
+```
+Tests: append `.withReadsAllUsers()` to each `FakePluginContext`, or `allUsers()` is `null` (the sample's
+suite went from 70 green to 67 red on exactly this). Assertions on `store.queryAcrossUsers(p)` become
+`store.acrossUsers().query(p)`.
+
+**Required if you render HTML you did not write — this is a security fix.** Grep for `DOMPurify`,
+`innerHTML`, `dangerouslySetInnerHTML` and `.description`:
+
+```diff
+- el.innerHTML = DOMPurify.sanitize(marked.parse(md));      // defaults allow <style> and style=
++ el.innerHTML = ctx.sanitize(marked.parse(md));             // the host's policy, after rendering
+- <span>{snap.description}</span>                             // prints the feed's tags as text
++ <span>{snap.descriptionText}</span>
+```
+If your own generated markup needs `class`/`data-*`, see "`ctx.sanitize`" in `frontend.md` for the
+placeholder pattern. Drop the direct `dompurify` dependency afterwards.
+
+**TS compile fallout**: a hand-written `DocClient` wrapper needs `getMany`; a `DisplaySnapshot` literal needs
+`descriptionText`; Java fixtures on the 9-arg `DisplaySnapshot` constructor get a removal warning.
+
+**Recommended.**
+- `color: var(--mc-accent)` / `outline: … var(--mc-accent)` → `--mc-accent-text`. Fills stay.
+- `"min"`/`"max"`/`"step"` on numeric config (at least `"min": 1` on an interval); your clamp becomes a
+  fallback.
+- A label for any consent category you introduced (`consent.categoryLabels`).
+- `ctx.docs.getMany` where you read keys for many scopes; delete any miss cache around `ctx.docs`.
+- Check `frontend.entry` against `FRONTEND_ENTRY_PATTERN`.
 
 ---
 
