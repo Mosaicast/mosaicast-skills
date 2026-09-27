@@ -159,10 +159,15 @@ has neither, build the plugin in full anyway and say at the end what could not b
    phone width — and that enabling a browser tool would fix that. Then carry on; do not ask again.
 2. **Ask for a Mosaicast instance** you may install into and **restart** (a restart is how core picks up a
    rebuilt plugin), and **ask whether it holds production or test data**. If the user has a `mosaicast-core`
-   checkout, `dev/instance.sh up --plugins` stands up a disposable seeded stack — best option, nothing real
-   at risk. **`--plugins` is not optional here** — plugins are opt-in and the flag defaults *off* (the
-   stack exists for README screenshots first, where the sample plugin's demo card is noise), so without it
-   your plugin never loads and the tile you are testing is silently absent.
+   checkout, `dev/instance.sh --name <plugin> up --plugin-dir "$PWD/dist"` stands up a disposable, **named**
+   seeded stack — best option, nothing real at risk. **Always pass `--name`**: named instances get their own
+   Postgres, ports and plugins dir under `/tmp/mosaicast-dev/<name>/`, so several sessions run side by side
+   without colliding, and a session only ever `up`s/`down`s its own name. Read ports from
+   `source <(dev/instance.sh --name <plugin> env)` rather than assuming a number — only the bare, un-named
+   `default` instance keeps fixed `:5433`/`:8081`/`:8099`. **`--plugin-dir` is what loads your own build** —
+   `--plugins` instead copies the checkout's own `./plugins` folder (the sample plugin's demo card, noise for
+   real plugin work) — so without one of the two your plugin never loads and the tile you are testing is
+   silently absent.
 
 Then the data rule, which is absolute:
 

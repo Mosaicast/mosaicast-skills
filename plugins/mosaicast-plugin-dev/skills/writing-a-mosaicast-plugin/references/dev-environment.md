@@ -31,40 +31,62 @@ rebuilt plugin, so without permission to restart it, an instance is barely usefu
 
 Three shapes, best first:
 
-1. **A disposable dev stack.** If the user has a `mosaicast-core` checkout, `dev/instance.sh up --plugins`
-   stands up an isolated, seeded Postgres (`:5433`) + feed server (`:8099`) + dev-profile app (`:8081`), and
-   `dev/instance.sh down` throws it all away. Nothing real is at risk, so you can seed freely — seeded with
-   only the fictional sample feed, never real dev data.
+1. **A disposable dev stack.** If the user has a `mosaicast-core` checkout, `dev/instance.sh --name <plugin>
+   up --plugin-dir "$PWD/dist"` stands up an isolated, seeded Postgres + feed server + dev-profile app under
+   `/tmp/mosaicast-dev/<name>/`, and `dev/instance.sh --name <plugin> down` throws it all away. Nothing real
+   is at risk, so you can seed freely — seeded with only the fictional sample feed, never real dev data.
 
    ```bash
-   dev/instance.sh up --plugins    # --plugins is not optional for plugin work — see below
-   dev/instance.sh status          # is it up, and which plugin ids actually loaded
-   dev/instance.sh logs [-f]       # the app log — last 200 lines, or follow
-   dev/instance.sh psql            # interactive shell on the fleeting database
-   dev/instance.sh down            # tear it all down
+   dev/instance.sh --name <plugin> up --plugin-dir "$PWD/dist"   # your own build; --plugins copies ./plugins instead
+   dev/instance.sh --name <plugin> status                        # is it up, and which plugin ids actually loaded
+   dev/instance.sh --name <plugin> logs [-f]                     # the app log — last 200 lines, or follow
+   dev/instance.sh --name <plugin> psql                          # interactive shell on the fleeting database
+   dev/instance.sh --name <plugin> down                          # tear down only this name
+   dev/instance.sh ls                                            # every instance: state, URL, core SHA, behind master?
    ```
 
-   **`--plugins` defaults *off*.** The script was renamed from `dev/screenshots.sh` — it existed for README
-   screenshots first, and with plugins loaded the sample plugin renders a demo card and placeholder artwork
-   that has no business in one. That means the default run is **useless for plugin work** unless you pass
-   `--plugins` explicitly, which loads `./plugins` (the checkout's own plugins folder — copy your `dist/`
-   there first, same as any manual install). `status` reports which ids actually loaded by asking the
-   running app, not by echoing the flag back, so it also catches a plugin that failed validation.
+   **Always pass `--name`, and pick one that's yours** (the plugin's own name is a good default). Named
+   instances are fully isolated — own Postgres container, ports, feed server, process and plugins dir, all
+   under `/tmp/mosaicast-dev/<name>/` — so several sessions (core, SDK, sample, wiki, bingo, stats, …) run
+   side by side without colliding. **A session only ever `up`s/`down`s its own name**: `down` stops only the
+   processes that name started (by recorded pid and lineage) and removes only its own container — there is
+   no pattern-matched `pkill` reaching anyone else's instance, and `up` on a name still running is refused
+   rather than torn down. Bare `dev/instance.sh up` (no `--name`) is the `default` instance, fixed at
+   `:5433`/`:8081`/`:8099` — fine solo, a collision waiting to happen once anyone else is also running one.
+
+   **Ports are allocated, not fixed** for any name other than `default` — read them from `env` rather than
+   assuming a number:
+
+   ```bash
+   source <(dev/instance.sh --name <plugin> env)   # MC_APP_URL, MC_APP_PORT, MC_PG_PORT, …
+   ```
+
+   **`--plugins` and `--plugin-dir` are both opt-in and do different things.** `--plugins` copies the
+   checkout's own `./plugins` folder (what the sample-screenshot flow uses; loads the sample plugin's demo
+   card, which has no business in a real plugin's dev loop); `--plugin-dir PATH` (repeatable) copies one
+   built plugin in as `<id>/` — the right flag for your own `dist/`, and it copies rather than links, so a
+   rebuild needs a fresh `up` (or re-copy) to take effect. `status` reports which ids actually loaded by
+   asking the running app, not by echoing the flag back, so it also catches a plugin that failed validation.
+   `--core REF` pins a specific core commit instead of the working tree (default `origin/master` for a named
+   instance) — resolved to a SHA and built once in a cached worktree, so your uncommitted core edits never
+   leak into someone else's instance.
 
    **`--admin` is accepted but currently does nothing.** It is parsed into a flag the script never reads —
    `up` always logs the seeded feed in as `podcaster`, never as `admin`, whatever you pass. Don't rely on it
    for an `/admin/*` or `/account` screenshot; log in yourself against the running app instead:
 
    ```bash
-   curl -s -c jar.txt http://localhost:8081/api/meta >/dev/null
+   source <(dev/instance.sh --name <plugin> env)
+   curl -s -c jar.txt "$MC_APP_URL/api/meta" >/dev/null
    xsrf=$(awk '/XSRF-TOKEN/{print $7}' jar.txt)
    curl -s -b jar.txt -c jar.txt -H "X-XSRF-TOKEN: $xsrf" \
-     -X POST 'http://localhost:8081/api/auth/dev-login?role=admin'
+     -X POST "$MC_APP_URL/api/auth/dev-login?role=admin"
    ```
 
    (`dev/instance.sh` defines a reusable `login <role>` shell function doing exactly this and echoing the
    cookie jar path — `source` the script and call it directly rather than retyping the curl pair, if you are
-   scripting more than one request.)
+   scripting more than one request. Browsers scope cookies by host, not port, so two instances open in one
+   browser profile on `localhost` log each other out — use one profile per instance.)
 2. **Their instance with test/dummy data.** Fine to restart, fine to seed — after asking (see below).
 3. **Their instance with production data.** Useful for rendering against real feeds. **Read-only** (see below).
 
