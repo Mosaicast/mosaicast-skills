@@ -1,6 +1,6 @@
 {
   "name": "mosaicast-plugin-dev",
   "description": "House skills for Mosaicast plugin work: writing a plugin (manifest, slots, ctx, stores, test kit), scaffolding a new plugin repo, and cutting a release.",
-  "version": "0.10.0",
+  "version": "0.10.1",
   "author": { "name": "The Mosaicast Authors" }
 }

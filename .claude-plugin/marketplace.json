@@ -3,14 +3,14 @@
   "owner": { "name": "The Mosaicast Authors" },
   "metadata": {
     "description": "Mosaicast development skills for Claude Code.",
-    "version": "0.10.0"
+    "version": "0.10.1"
   },
   "plugins": [
     {
       "name": "mosaicast-plugin-dev",
       "source": "./plugins/mosaicast-plugin-dev",
       "description": "House skills for Mosaicast plugin work: writing a plugin (manifest, slots, ctx, doc/schema storage, test kit), scaffolding a new plugin repo, and cutting a release.",
-      "version": "0.10.0",
+      "version": "0.10.1",
       "category": "development",
       "tags": ["mosaicast", "plugin", "sdk"]
     }
