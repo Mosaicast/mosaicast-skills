@@ -41,9 +41,16 @@ Three shapes, best first:
    dev/instance.sh --name <plugin> status                        # is it up, and which plugin ids actually loaded
    dev/instance.sh --name <plugin> logs [-f]                     # the app log — last 200 lines, or follow
    dev/instance.sh --name <plugin> psql                          # interactive shell on the fleeting database
+   dev/instance.sh --name <plugin> psql -At -c "select 1"        # scriptable; -t only added when there's no TTY
+   dev/instance.sh --name <plugin> restart                       # rebuilt plugin, same data — see §5
    dev/instance.sh --name <plugin> down                          # tear down only this name
    dev/instance.sh ls                                            # every instance: state, URL, core SHA, behind master?
    ```
+
+   `--app-arg --some.property=value` (repeatable, on `up` or `restart`) passes an extra Spring property to
+   the app — e.g. pointing `mosaicast.external.allowed-private-origins` at a local LibreTranslate for an
+   `external` block. Properties the script already sets are refused. `restart` replays the app args (and
+   plugin dirs) the name was started with unless you pass new ones.
 
    **Always pass `--name`, and pick one that's yours** (the plugin's own name is a good default). Named
    instances are fully isolated — own Postgres container, ports, feed server, process and plugins dir, all
@@ -159,8 +166,21 @@ Three things only a live host can prove, because the test kit deliberately canno
 
 ## 5. The loop
 
-While developing, the manual copy is still the right tool — it is your own unreleased build, so there is no
-tag to install by:
+On a **named `dev/instance.sh` stack** (§2 above), don't `down`/`up` to pick up a rebuild — that reseeds the
+database and throws away whatever you wrote to exercise the plugin. Use `restart` instead: it re-copies the
+plugin dirs recorded at `up` (or new ones you pass), restarts only the app, and keeps the database, the feed
+and the ports:
+
+```bash
+./build.sh
+dev/instance.sh --name <plugin> restart      # new app, same data, same core SHA unless --core is given
+```
+
+`restart` refuses a `--core` whose newest migration is older than the database's, rather than starting an app
+that can't read its own schema.
+
+On **any other instance** (manual install, no `dev/instance.sh`), the manual copy is still the right tool —
+it is your own unreleased build, so there is no tag to install by:
 
 ```bash
 ./build.sh
