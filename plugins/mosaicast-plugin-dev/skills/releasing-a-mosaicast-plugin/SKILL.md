@@ -8,7 +8,7 @@ description: Use when cutting a release of a Mosaicast plugin, bumping its versi
 Two versions are in play and they are not the same thing:
 
 - **the plugin's own version** — SemVer, yours to choose, lives in three files
-- **`platformApi`** — the host contract the backend compiled against, currently **0.16.0** (core **0.7.4**
+- **`platformApi`** — the host contract the backend compiled against, currently **0.17.0** (core **0.7.6**
   hosts it), matched by core on exact `major.minor` (patch is free to the host — but keep one string across
   all four anchors, because the contract test and the CI drift guard compare them literally)
 
@@ -71,13 +71,13 @@ The SDK artifacts live on GitHub Packages, which **requires authentication even 
 in CI. Without it the backend build fails to resolve `dev.mosaicast:plugin-api` with a 401 that reads like
 the artifact does not exist.
 
-**0.16.0 is published** on both npm and GitHub Packages (tagged `v0.16.0`), so no workaround is needed today. If a
+**0.17.0 is published** on both npm and GitHub Packages (tagged `v0.17.0`), so no workaround is needed today. If a
 future SDK version you need is on master but **untagged**, resolve it from a local checkout instead — `mavenLocal()` after `./gradlew publishToMavenLocal` in the SDK repo, or
 `includeBuild("../mosaicast-plugin-sdk")`. Do not ship a release built that way without confirming the
 artifact is public first, or nobody else can rebuild it.
 
 **The SDK's 0.15.0 release originally shipped tagged only `0.15.0`, breaking its own `v<version>`
-convention** (every other release, `v0.16.0` and `v0.14.0` down to `v0.1.0`, has the prefix). Never affected npm/GitHub
+convention** (every other release, `v0.17.0` and `v0.16.0` down to `v0.1.0`, has the prefix). Never affected npm/GitHub
 Packages, which publish off `package.json`/`build.gradle.kts` rather than the tag. `v0.15.0` was since added
 as a second tag on the same commit, so both `git checkout v0.15.0` and `git checkout 0.15.0` resolve —
 but don't assume every future release gets this treatment; check the tag actually exists before a script
@@ -118,7 +118,7 @@ The folder name **must equal the manifest `id`**. Then verify in this order — 
 | same | a schema field whose **type changed** since the last load — provisioning is additive-only and refuses type changes |
 | same | `storage: "schema"` as a bare string, or a schema block with no entities |
 | same | unknown slot placement, `data.writableBy: "anonymous"`, a consent category containing a dot, a host without a scheme |
-| same | a `blobs` block with a non-positive limit, an empty `mimeTypes` list, or `image/svg+xml` in it |
+| same | a `blobs` block with a non-positive limit, an empty `mimeTypes` list, `image/svg+xml` in it, an unknown `readableBy`/`writableBy` floor, or `blobs.writableBy: "anonymous"` |
 | same | a `tags` block with both `readsVocabulary` and `writesEpisodes` false, or an `external` block with empty `kinds` — both "asks for nothing" refusals |
 | same | an `external.kinds` entry that is not `"translation"` (the only kind today), or `nav[]` entries with no `page` slot, no `label`, a `../`-climbing `path`, or two entries normalising to the same `path` |
 | `nav[]` loads but core ignores your entry's role floor | you wrote `"role"` — core's field is `"visibleTo"`, same as a slot; the SDK's TS type disagrees with core here |

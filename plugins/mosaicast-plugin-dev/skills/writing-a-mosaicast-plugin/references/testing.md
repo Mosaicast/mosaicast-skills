@@ -191,6 +191,13 @@ all `null` on the same argument: a component written against a value that is alw
 case where it is not, and most plugins declare none of the five manifest
 blocks that turn them non-`null`.
 
+**`filter` is a snapshot, not a live double, unlike `route`.** `makeMockCtx({ filter: { current: () => ({
+season: 1 }), onChange: () => noop } })` fixes what `current()` returns for the whole render; `onChange`
+stays a no-op that never fires (same as `player.on`, `route.onChange` and `locale.onChange`), even though
+core 0.7.6 makes the real `ctx.filter` reassign `ctx` and fire listeners on a visitor's filter change. To
+test a component's reaction to a filter *change*, re-render with a new `ctx` (new `filter.current()` return
+value) the same way a `MosaicastHandle`'s `update(next)` test does — not by waiting on `onChange`.
+
 ### `apiError(status, problem?)` and `flushMockApi(client)` (0.9.0)
 
 ```ts
@@ -260,6 +267,11 @@ expect(root.textContent).toContain('The Kraken');   // and renders nothing for '
 throwing — exactly what the host does for an episode this visitor may not see. `requested` records every
 slug asked for, batched calls included, and `displayMany` clamps at `DISPLAY_BATCH_LIMIT` the same way the
 host does.
+
+`DisplaySnapshotFixture` picked up `feed`/`season`/`episodeNo` for free (0.17.0) — they're plain optional
+fields on `DisplaySnapshot`, so `withDisplay('kraken', { title: '…', description: '', feed: 'the-deep',
+season: 2, episodeNo: 3 })` is enough to test `resolveSeasonScope`/`seasonScope` against a fixture; omitting
+them is still valid and exercises the "older host" / "no season" absent case.
 
 ```ts
 const tags = makeMockTags({ writesEpisodes: false }).withFeedTag('kraken', 'maritime');
