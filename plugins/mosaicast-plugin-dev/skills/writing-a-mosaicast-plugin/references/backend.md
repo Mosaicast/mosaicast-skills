@@ -70,12 +70,18 @@ ScopeType = SITE | FEED | SEASON | EPISODE | USER
 Scope.site()                 // id pinned to SITE_ID = "main"
 Scope.user()                 // id pinned to SELF_ID = "me"
 Scope.feed(id) / season(id) / episode(id)
+Scope.season(feedSlug, season)   // builds "<feedSlug>:<season>" for you — since 0.17.0
 ```
 
 Ids are **public slugs**, not UUIDs (a season is `<feedSlug>:<n>`). The canonical constructor normalises
 SITE and USER ids whatever you pass. There is deliberately **no `Scope.user(String)`** — a plugin has no
 business naming a user, so the IDOR cannot be written. `Scope.site(String)` was removed in 0.5.0. A `switch`
 over `ScopeType` must handle `USER` or have a `default`.
+
+**Prefer `Scope.season(feedSlug, season)` over hand-building the id with `Scope.season(id)`** (0.17.0) — it
+validates (`IllegalArgumentException` on a blank `feedSlug` or a negative `season`) and matches what
+`DisplaySnapshot.seasonScope()` returns, so a per-season aggregate never risks a separator typo. The two
+parts come from a `DisplaySnapshot`'s own `feed()`/`season()` accessors (see below).
 
 `Role` = `ADMIN | PODCASTER | FAN`; anonymous is the absence of a user, not a `Role` value.
 
@@ -214,13 +220,29 @@ DisplaySnapshot display(String refId);     // not authoritative — the host ove
 ```
 
 `DisplaySnapshot(title, description, audioUrl, publishedAt, duration, imageUrl, feedImageUrl, author,
-subtitle, descriptionText)` plus `artwork()`, which falls back from episode image to feed image.
+subtitle, descriptionText, feed, season, episodeNo)` — the 13-component canonical constructor since 0.17.0 —
+plus `artwork()`, which falls back from episode image to feed image, and `seasonScope()`.
 
 - **`description` is the feed's show notes verbatim — untrusted third-party HTML** (documented since 0.16.0).
   Anything that writes show notes into output — an `OgMeta` description, a `SearchHit` excerpt, a
   notification — uses **`descriptionText()`** (0.16.0), which the host reduced to plain text. Never `null`.
 - The 9-arg constructor (without `descriptionText`) still compiles, **deprecated for removal**, and leaves
-  it `""`; a fixture that renders description text should use all ten.
+  it `""`; the 10-arg one (without `feed`/`season`/`episodeNo`) stays for a fixture that never looks at
+  seasons — a fixture that renders description text or needs the episode's place in the site should use all
+  thirteen.
+- **`feed`, `season`, `episodeNo` are the one authoritative trio (0.17.0)** — resolved from `EpisodeRef`
+  identity (§4.4) when the host hands the snapshot over, **never** part of what a feed refetch overwrites
+  like every other field here. All three optional: absent against a feed with no season data, and
+  `episodeNo` absent for an unnumbered episode inside a numbered season (never infer one from the other).
+  `seasonScope()` returns `Scope.season(feed, season)`, or `null` when either is missing — prefer it over
+  reading the two fields and building the scope yourself.
+  ```java
+  var snaps = episodeSlugs.stream().map(ctx.feeds()::display).filter(Objects::nonNull).toList();
+  for (var snap : snaps) {
+      Scope season = snap.seasonScope();                 // null-safe; never hand-build "<feed>:<n>"
+      if (season != null) totals.merge(season, minutesOf(snap), Double::sum);
+  }
+  ```
 
 ## `Tags` (only when the manifest declares a `tags` block)
 

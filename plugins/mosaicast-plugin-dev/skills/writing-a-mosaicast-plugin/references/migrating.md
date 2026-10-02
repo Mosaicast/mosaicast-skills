@@ -1,6 +1,6 @@
-# Migrating an existing plugin up to 0.16.0
+# Migrating an existing plugin up to 0.17.0
 
-The SDK's own `MIGRATION.md` (in the `mosaicast-plugin-sdk` checkout, or `v0.16.0/MIGRATION.md` on GitHub —
+The SDK's own `MIGRATION.md` (in the `mosaicast-plugin-sdk` checkout, or `v0.17.0/MIGRATION.md` on GitHub —
 0.15.0 was once tagged only `0.15.0` without the `v`; both forms resolve now) is the authoritative checklist for the
 **SDK** half of each step — read it, it is short and version-scoped. This file adds two things that doc
 does not: the **core-side** changes each release shipped alongside it, and one file walking the **whole
@@ -26,9 +26,70 @@ first (file storage, `ctx.links`), then start here.
 | 0.13.x → 0.14.0 | Yes (`platformApi`) | No — new surface, nothing removed | `ctx.notify`/`ctx.notifier()`/`notifications` — an in-app inbox |
 | 0.14.x → 0.15.0 | Yes (`platformApi`) | Java: only if you implement `PluginContext` yourself | `onSchedule(Supplier<Duration>, …)` — a schedule that follows config; `MosaicastHandle` — a component that survives a new `ctx` |
 | 0.15.x → 0.16.0 | Yes (`platformApi`; `data.readsAllUsers` if you aggregate over users) | **Yes — `DocStore.queryAcrossUsers` is gone**; TS: a hand-written `DocClient`/`DisplaySnapshot` literal | `ctx.sanitize`, `descriptionText`, `--mc-accent-text`, config bounds, `consent.categoryLabels`, `ctx.docs.getMany` |
+| 0.16.x → 0.17.0 | Yes (`platformApi`) | No — new, optional fields and a live `ctx.filter`; nothing removed | `DisplaySnapshot.feed`/`.season`/`.episodeNo`, `seasonScope()`, a live `ctx.filter`, uncapped `ctx.episodes`, ZIP uploads, per-`blobs` floors |
 
-Do them **in order**; do not skip to 0.16.0 and back-port the manifest fields, because 0.9.0's compile
+Do them **in order**; do not skip to 0.17.0 and back-port the manifest fields, because 0.9.0's compile
 break and 0.10.0's `ctx.translation` addition both have to land first for the later steps to make sense.
+
+---
+
+## 0.16.x → 0.17.0: placing an episode in its season and feed
+
+Needs **core 0.7.6** — a 0.17 plugin calling `snapshot.season()`/`snapshot.feed()` against an older host's
+`plugin-api` jar (loaded parent-first) fails with `NoSuchMethodError`, before the exact-`major.minor` check
+even runs. `mosaicast-plugin-sample` has **not yet** moved to 0.17.0 at the time of writing — check its tag
+before treating it as a worked example for this step.
+
+**Required.**
+
+```diff
+- "platformApi": "0.16.0",
++ "platformApi": "0.17.0",
+- compileOnly("dev.mosaicast:plugin-api:0.16.0")      testImplementation("…plugin-testkit:0.16.0")
++ compileOnly("dev.mosaicast:plugin-api:0.17.0")      testImplementation("…plugin-testkit:0.17.0")
+- "@mosaicast/plugin-sdk": "0.16.0"
++ "@mosaicast/plugin-sdk": "0.17.0"
+```
+
+**That's the whole required migration — every addition is optional to use**, and nothing was removed. Three
+things worth adopting anyway:
+
+**1. If you aggregate per season, stop parsing `ctx.episodeLabels`.** It is a display string
+(`"S01E06 · Title"`) that also drops the season entirely for an unnumbered episode — two bugs for the price
+of one regex. `DisplaySnapshot.feed`/`.season`/`.episodeNo` are the authoritative identity fields instead,
+resolved by the host on read and never overwritten by a feed refetch like the rest of the snapshot is:
+
+```diff
+- const season = /S(\d+)/.exec(ctx.episodeLabels?.[slug] ?? '')?.[1];
++ const snap = await ctx.feeds.display(slug);
++ const season = snap && resolveSeasonScope(snap);   // Scope | undefined — never hand-build "<feed>:<n>"
+```
+```java
+- Scope season = Scope.season(feedSlugFromSomewhereElse + ":" + guessedSeasonNumber);
++ Scope season = snapshot.seasonScope();              // null-safe; needs feed() and season() both present
+```
+
+**2. If you read `ctx.filter`, handle `{}` as "unfiltered" on every core version, not just as a default.**
+It is **live since core 0.7.6** — `current()` reflects the shell's `season`/`tag`/`order` URL filters and
+`onChange` fires on a real change — but still `{}` on core 0.7.5 and older, and still `{}` on a page mount
+on every core version (there the query string is `ctx.route.query`, not the shell's). One build runs
+everywhere only if an absent axis is always treated as unfiltered, never as "not loaded yet."
+
+**3. If you aggregate over a whole `feed`/`site` scope, re-check your numbers.** `ctx.episodes` used to stop
+at 200 for those two scope types; a show past that length under-counted silently, no error, no truncation
+flag. Core 0.7.6 pages the resolution to the end — nothing to change in your code, but a plugin that worked
+around the 200 cap with its own pagination can delete that workaround.
+
+**TS compile fallout: none.** `feed`/`season`/`episodeNo` are new optional fields — a `DisplaySnapshot`
+literal that omits them still compiles. Java fixtures on the 10-argument `DisplaySnapshot` constructor
+(without the trio) keep compiling too; only the 9-argument one (without `descriptionText`, deprecated since
+0.16.0) is scheduled for removal.
+
+**Recommended, if you store files.**
+- `application/zip` is now a storable, default-allowed `blobs.mimeTypes` entry — declare it by name, not a
+  browser alias (`application/x-zip-compressed` etc. are canonicalised to it, not separately permitted).
+- `blobs` can declare its own `readableBy`/`writableBy`, separate from `data`'s — use it to keep raw uploads
+  more private than the computed numbers your plugin publishes from them.
 
 ---
 

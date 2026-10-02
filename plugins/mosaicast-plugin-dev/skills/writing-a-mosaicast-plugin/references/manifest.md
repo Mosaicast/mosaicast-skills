@@ -13,7 +13,7 @@ rejected.
 {
   "id": "sample",
   "version": "2.17.0",
-  "platformApi": "0.16.0",
+  "platformApi": "0.17.0",
   "name": "Sample",
   "license": "Apache-2.0",
   "author": "The Mosaicast Authors",
@@ -209,7 +209,8 @@ storage, or that only the backend can reach it, is obsolete:
 
 ```json
 "blobs": { "maxFileBytes": 5242880, "quotaBytes": 268435456,
-           "mimeTypes": ["image/png", "image/jpeg", "image/webp"] }
+           "mimeTypes": ["image/png", "image/jpeg", "image/webp", "application/zip"],
+           "readableBy": "podcaster", "writableBy": "podcaster" }
 ```
 
 **Opt-in and declared, never derived** — the same rule as the data floors. Absent ⇒ no file storage at all:
@@ -238,9 +239,22 @@ and refuses every upload):
 - `image/svg+xml` anywhere in `mimeTypes` — **SVG is never storable** (a script container wearing an
   image's extension); an operator cannot re-enable it either, since it is filtered out of the install's
   allow-list too
+- a `blobs.readableBy`/`writableBy` that isn't one of the known floors — *"blobs floor '%s' is not one of
+  […]"* — or a `writableBy` of `anonymous` — *"blobs.writableBy may not be 'anonymous' — an upload needs a
+  signed-in user to belong to"* (same rule as `data.writableBy`)
 
-Access uses the `data` floors: reads take `readableBy`, writes take `writableBy`. `backendOwned` does not
-apply. Purge takes a plugin's files with it, matched on the namespace exactly.
+**ZIP is storable (core 0.7.6).** `application/zip` is in the default allow-list; the sniffer recognises the
+bytes and canonicalises the browser aliases (`application/x-zip-compressed`, `application/x-zip`) to it, so
+declare `application/zip` in `mimeTypes`, never an alias. Anything that isn't an image or audio is served
+`Content-Disposition: attachment`, not inline.
+
+**`blobs` may set its own access floors (`readableBy`/`writableBy`, core 0.7.6), in the same vocabulary and
+on the same rule as `data` (`writableBy` may not be `anonymous`).** Absent means the `data` floors — nothing
+changes for an existing manifest. Use this to keep uploaded files more private than the plugin's computed
+data: a stats plugin can publish its aggregate numbers under `data.readableBy: "anonymous"` while keeping the
+raw archives it computed them from behind `blobs.readableBy: "podcaster"`. Without an explicit `blobs` floor,
+reads take `data.readableBy` and writes take `data.writableBy`, same as before. `backendOwned` does not
+apply to blobs either way. Purge takes a plugin's files with it, matched on the namespace exactly.
 
 ## `tags` — the shared vocabulary (0.9.0)
 
@@ -525,6 +539,7 @@ A **service-level** declaration. The legacy `{ categories, externalSources }` sh
 `data floor '%s' is not one of […]` · `data.writableBy may not be 'anonymous'` ·
 `data.backendOwned entry '%s' is not usable` · `blobs limits must be positive; got %s` ·
 `blobs.mimeTypes is present but names no type` · `blobs.mimeTypes may not include image/svg+xml` ·
+`blobs floor '%s' is not one of […]` · `blobs.writableBy may not be 'anonymous'` ·
 `tags block asks for nothing (readsVocabulary and writesEpisodes are both false)` ·
 `external block declares no kinds` · `external kind '%s' is not one of […]` ·
 `external.usedBy '%s' is not one of […]` (`external.usedBy: anonymous` loads fine but logs a warning) ·

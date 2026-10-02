@@ -57,7 +57,7 @@ interface MosaicastHandle {
 
 ```
 scope: { type: 'site'|'feed'|'season'|'episode'; id: string }   // slot scope; never `user`; site id is 'main'
-episodes: string[]                                              // resolved, access-filtered public slugs
+episodes: string[]                                              // resolved, access-filtered public slugs — full scope, not capped (core 0.7.6)
 episodeLabels?: Record<string, string>                          // slug → label; may be absent or partial
 episode?: { status: 'PLANNED'|'PUBLISHED'|'WITHDRAWN' }         // see "what the host actually supplies"
 user: { id: string; role: 'admin'|'podcaster'|'fan';                // null = anonymous
@@ -101,10 +101,10 @@ SDK reads `plugin.json`.
 
 ## What the host actually supplies today
 
-Verified against core's `frontend/src/plugins/buildCtx.ts` and `PluginMount.tsx` at 0.7.2 — assume this
+Verified against core's `frontend/src/plugins/buildCtx.ts` and `PluginMount.tsx` at 0.7.6 — assume this
 until core says otherwise. **`docs`, `feeds`, `tags`, `users`, `notify`, `schema`, `blobs`, `translation`,
-`locale.available/content` and `consent.has/granted/request` are real, wired implementations** — the
-"contract ahead of implementation" gap 0.9.0 shipped with has closed for all of them.
+`locale.available/content`, `consent.has/granted/request` and, since 0.7.6, `filter` are real, wired
+implementations** — the "contract ahead of implementation" gap 0.9.0 shipped with has closed for all of them.
 
 **The 4×/s `ctx` churn `MosaicastHandle` (0.15.0) exists to survive is itself already fixed on the host
 side, as of 0.7.2.** `PluginMount.tsx` wraps `buildCtx(...)` in `useMemo`, and the player-time reader in its
@@ -116,11 +116,16 @@ still reassign `ctx` more than "never" — but a component you're debugging toda
 is not hitting the four-times-a-second case the SDK's example was written against.
 
 - **`ctx.episode` is not populated.** Never branch on `episode?.status`; if you need publication state, it is
-  not available client-side. Still true at 0.7.2 — this is the one field the shell has never wired.
-- **`filter.current()` always returns `{}`**, and **`filter.onChange`, `player.on`, `route.onChange` and
-  `locale.onChange` return no-op unsubscribes that never fire.** `consent.onChange` and `route.navigate` are
-  the live ones. This is unchanged since the 0.8.0-era skill and is worth re-checking on every bump, since
-  it is exactly the kind of thing that quietly starts working.
+  not available client-side. Still true at 0.7.6 — this is the one field the shell has never wired.
+- **`filter.current()` is live since core 0.7.6** (core#248) — exactly the kind of thing the previous bullet
+  warned would quietly start working. `current()` reflects the shell's `?season=`/`?tag=`/`?order=` URL
+  filters as `{ season, tags, sort }`, and `onChange` fires on a real change — including for a listener
+  registered through an earlier `ctx` (the host reassigns `ctx` on a filter change, same mechanism as a
+  route change). **On a page mount (`/p/<id>/…`) it still stays `{}`**, because there the query string is
+  the plugin's own (`ctx.route.query`), not the shell's. Core 0.7.5 and older always return `{}` and never
+  fire — treat an absent axis as "unfiltered" and the same build runs on both. `player.on`, `route.onChange`
+  and `locale.onChange` **still** return no-op unsubscribes that never fire; `consent.onChange` and
+  `route.navigate` remain the other live ones.
 - `route.path` is **not** subscribed to — the host rebuilds `ctx` when the subpath changes and re-assigns it,
   which re-runs your render (with your previous cleanup first). So read `ctx.route.path` at render time and
   a route change reaches you; `onChange` still never fires. `route.query`/`route.hash` are populated **only
@@ -128,6 +133,11 @@ is not hitting the four-times-a-second case the SDK's example was written agains
   shell's filter state, which is `ctx.filter`'s to expose.
 - `route.navigate` is a real router call and works (see below), except in a mount with no router above it,
   where it degrades to a no-op rather than throwing.
+- **`ctx.episodes` covers the whole scope, not just the first 200 (core 0.7.6, core#248).** Before, a `feed`
+  or `site` scope silently stopped at 200 episodes — an aggregate over a long-running show (a per-season
+  speaking-share chart) was quietly wrong past that point, with no error and no truncation flag. The shell
+  now pages the host's scope resolution to the end. `FeedsClient.displayMany` keeps its own, separate
+  `DISPLAY_BATCH_LIMIT` (200) clamp per *call* — chunk `ctx.episodes` yourself if it is longer than that.
 - `locale.current()` is fixed for the mount; `locale.available()`/`locale.content()` come from
   `GET /api/i18n/locales` and the admin's content-languages setting respectively — real lists, not stubs, and
   they may legitimately disagree with your own `locales/*.json` catalogs (§12.7).
@@ -272,6 +282,28 @@ used to enumerate episodes `ctx.episodes` did not already hand you.
 Never assign it to `innerHTML`. Show **`descriptionText`** (0.16.0, plain text, never absent) on a card or a
 teaser; if you really need the markup, `ctx.sanitize(snap.description)`. Rendering `description` as React
 text is the other bug: it prints the tags.
+
+**`feed`, `season`, `episodeNo` place the episode in the site (0.17.0, needs core 0.7.6+)** — the one part of
+a `DisplaySnapshot` that *is* authoritative identity rather than feed content, resolved from `EpisodeRef`
+on read and never overwritten by a refetch. All three are optional: absent against an older host, and
+`episodeNo` absent for an unnumbered episode even when `season` is set (a numbered season can still have an
+unnumbered prologue — never infer one from the other).
+
+```ts
+import { seasonScope, resolveSeasonScope } from '@mosaicast/plugin-sdk';
+
+const snaps = await ctx.feeds.displayMany(ctx.episodes);
+const minutesBySeason: Record<string, number> = {};
+for (const [slug, snap] of Object.entries(snaps)) {
+  const season = resolveSeasonScope(snap);               // Scope | undefined — never hand-build "<feed>:<n>"
+  if (season) minutesBySeason[season.id] = (minutesBySeason[season.id] ?? 0) + minutesOf(slug);
+}
+seasonScope('the-sample-cast', 1);   // => { type: 'season', id: 'the-sample-cast:1' } — throws on a blank feed or a non-integer season
+```
+
+Before 0.17.0 this data only existed inside `episodeLabels`, a display string (`"S01E06 · Title"`) that also
+drops the season entirely for an unnumbered episode — parse it and you inherit both gaps. Prefer the typed
+fields.
 
 ### `ctx.sanitize` — HTML you did not write (0.16.0)
 
@@ -598,6 +630,16 @@ Rules that matter:
   allow-list, the *actual* type sniffed from the leading bytes, then the quota. **SVG is never accepted.**
 - **Read the quota first.** `quota()` reports the *effective* numbers (operator caps and any admin grant),
   not what your manifest asked for. Telling someone the ceiling beats refusing them after an upload.
+- **ZIP is storable (core 0.7.6, core#246).** `application/zip` joined the default allow-list; the sniffer
+  recognises the bytes (a local file header, or an empty archive's end-of-central-directory record) and the
+  browser aliases (`application/x-zip-compressed` from Chrome on Windows, `application/x-zip`) are
+  canonicalised to it, both on upload and in a manifest's `blobs.mimeTypes` — declare `application/zip`, not
+  the alias. Anything that is not an image or audio is now served `Content-Disposition: attachment`, so an
+  archive opens as a download, not inline — opening it safely is still your job.
+- **Uploads can be more private than your data (core 0.7.6, core#247).** `blobs` may declare its own
+  `readableBy`/`writableBy` in `plugin.json`; absent means the `data` floors, so nothing changes for an
+  existing manifest. Use it to keep the raw files behind a computation private while the numbers you derived
+  from them stay public under the `data` floor.
 
 Status codes worth handling: **404** no `blobs` block, unknown/disabled plugin, or an unknown ref · **413
 `problems/blob-quota-exceeded`** the file is over the per-file ceiling or would exceed the quota · **415

@@ -1,6 +1,6 @@
 ---
 name: writing-a-mosaicast-plugin
-description: Use when creating or modifying a Mosaicast plugin (any mosaicast-plugin-* repo or the plugin-sample). Covers the plugin.json manifest (slots and placements, the page slot behind /p/<id>/*, data access floors, backendOwned keys, consent services, doc vs schema storage, the blobs file-storage block, the tags vocabulary block, the external-services block, the identity block (ctx.users, resolving user UUIDs to a name/avatar), the notifications block (ctx.notify/ctx.notifier, putting a message in a user's inbox), nav entrances into the host menu, config fields with a localized label/description and a closed options set, the license/author/homepage/attribution credit fields), the backend PluginBackend/PluginContext contract (including onSchedule's Supplier<Duration> overload for a schedule that actually follows config) and its optional extension points (ShareMetadataProvider and its per-URL OgMeta.locale, SitemapProvider and its hreflang-alternates SitemapUrl.alternates, PageRouteProvider, SearchProvider, UserDataHandler), per-user data in the USER scope, the frontend Web Component via the SDK ctx (ctx.docs, ctx.feeds, ctx.tags, ctx.users, ctx.notify, ctx.schema reads, ctx.blobs uploads, ctx.links, ctx.locale.available/content, ctx.translation, ctx.route.navigate, typed ctx.api errors) plus defineMosaicastElement's MosaicastHandle (a render surviving a reassigned ctx instead of being torn down) and theme tokens including the --mc-icon-* icon set, testing against the SDK test kit, and installing a plugin by spec (owner/repo@tag#sha256). Trigger whenever writing the manifest, adding a slot, wiring ctx, storing per-user data, uploading or serving files, linking to core pages, querying schema tables from the frontend, reading or writing the shared tag vocabulary, contributing to site search, handling account deletion/export, real 404s for a page plugin's unknown subpaths, declaring external-service (translation) use, declaring what language a plugin page or sitemap translation group is written in, resolving user ids to a display name/avatar, sending an in-app notification to a user, adding a nav entrance, labeling or restricting a config field, making a scheduled task follow a configurable interval, keeping a component's state across a re-rendered ctx, sanitizing HTML a plugin did not write (ctx.sanitize), aggregating over every user's data (data.readsAllUsers / ctx.allUsers), bounding a config value, labelling a consent category, navigating inside a page plugin, declaring backend-owned or schema storage, styling a plugin tile's icons, crediting a plugin's license or data source, bumping platformApi, installing or releasing a plugin, or building a plugin's backend or frontend.
+description: Use when creating or modifying a Mosaicast plugin (any mosaicast-plugin-* repo or the plugin-sample). Covers the plugin.json manifest (slots and placements, the page slot behind /p/<id>/*, data access floors, backendOwned keys, consent services, doc vs schema storage, the blobs file-storage block (its own optional readableBy/writableBy floors, separate from data's, and ZIP as a storable type), the tags vocabulary block, the external-services block, the identity block (ctx.users, resolving user UUIDs to a name/avatar), the notifications block (ctx.notify/ctx.notifier, putting a message in a user's inbox), nav entrances into the host menu, config fields with a localized label/description and a closed options set, the license/author/homepage/attribution credit fields), the backend PluginBackend/PluginContext contract (including onSchedule's Supplier<Duration> overload for a schedule that actually follows config) and its optional extension points (ShareMetadataProvider and its per-URL OgMeta.locale, SitemapProvider and its hreflang-alternates SitemapUrl.alternates, PageRouteProvider, SearchProvider, UserDataHandler), per-user data in the USER scope, the frontend Web Component via the SDK ctx (ctx.docs, ctx.feeds, ctx.tags, ctx.users, ctx.notify, ctx.schema reads, ctx.blobs uploads, ctx.links, ctx.locale.available/content, ctx.translation, ctx.route.navigate, the live ctx.filter and the uncapped ctx.episodes, typed ctx.api errors) plus DisplaySnapshot's feed/season/episodeNo identity fields and seasonScope()/resolveSeasonScope(), defineMosaicastElement's MosaicastHandle (a render surviving a reassigned ctx instead of being torn down) and theme tokens including the --mc-icon-* icon set, testing against the SDK test kit, and installing a plugin by spec (owner/repo@tag#sha256). Trigger whenever writing the manifest, adding a slot, wiring ctx, storing per-user data, uploading or serving files, linking to core pages, querying schema tables from the frontend, reading or writing the shared tag vocabulary, contributing to site search, handling account deletion/export, real 404s for a page plugin's unknown subpaths, declaring external-service (translation) use, declaring what language a plugin page or sitemap translation group is written in, resolving user ids to a display name/avatar, sending an in-app notification to a user, adding a nav entrance, labeling or restricting a config field, making a scheduled task follow a configurable interval, keeping a component's state across a re-rendered ctx, sanitizing HTML a plugin did not write (ctx.sanitize), aggregating over every user's data (data.readsAllUsers / ctx.allUsers), bounding a config value, labelling a consent category, navigating inside a page plugin, declaring backend-owned or schema storage, styling a plugin tile's icons, crediting a plugin's license or data source, bumping platformApi, installing or releasing a plugin, placing an episode in its season or feed for a per-season aggregate, reading the visitor's active season/tag/sort filter, storing a ZIP archive, declaring an upload floor stricter than the plugin's data floor, or building a plugin's backend or frontend.
 ---
 
 # Writing a Mosaicast plugin
@@ -10,37 +10,40 @@ doc and this skill disagree, see "Which docs to trust" below.
 
 ## Version pins — get these wrong and the plugin does not load
 
-Contract version is **0.16.0** (`PlatformApi.VERSION`, `PLATFORM_API_VERSION`), and core **0.7.4** hosts it.
-The host demands an **exact `major.minor`** match; patch is free. A `0.15.x` manifest is *rejected at load*,
-not warned about — and a 0.16 plugin is rejected by core 0.7.2/0.7.3, so check which core you target.
+Contract version is **0.17.0** (`PlatformApi.VERSION`, `PLATFORM_API_VERSION`), and core **0.7.6** hosts it.
+The host demands an **exact `major.minor`** match; patch is free. A `0.16.x` manifest is *rejected at load*,
+not warned about — and a 0.17 plugin is rejected by core 0.7.0–0.7.5, so check which core you target.
 
 ```json5
-"platformApi": "0.16.0"                                 // plugin.json
+"platformApi": "0.17.0"                                 // plugin.json
 ```
 ```kotlin
-compileOnly("dev.mosaicast:plugin-api:0.16.0")          // backend/build.gradle.kts
-compileOnly("org.pf4j:pf4j:3.15.1")
-annotationProcessor("org.pf4j:pf4j:3.15.1")             // mandatory: generates the @Extension index
-testImplementation("dev.mosaicast:plugin-testkit:0.16.0")
+compileOnly("dev.mosaicast:plugin-api:0.17.0")          // backend/build.gradle.kts
+compileOnly("org.pf4j:pf4j:3.16.0")
+annotationProcessor("org.pf4j:pf4j:3.16.0")             // mandatory: generates the @Extension index
+testImplementation("dev.mosaicast:plugin-testkit:0.17.0")
 ```
 ```json5
-"@mosaicast/plugin-sdk": "0.16.0"                       // frontend/package.json
+"@mosaicast/plugin-sdk": "0.17.0"                       // frontend/package.json
 ```
 
-Both halves of `0.16.0` are published on npm and GitHub Packages (tag `v0.16.0`) — no `mavenLocal()`
+Both halves of `0.17.0` are published on npm and GitHub Packages (tag `v0.17.0`) — no `mavenLocal()`
 workaround needed. Maven is GitHub Packages
 (`https://maven.pkg.github.com/Mosaicast/mosaicast-plugin-sdk`), which needs a PAT with `read:packages`
 **even for public reads**. Jackson is **3.2.2** (`tools.jackson.*`), not `com.fasterxml`. **Pin the same
 string in all four places** — the CI drift guard and the manifest contract test both compare them.
 
 Coming from an older pin? `references/migrating.md` walks 0.8.0 → 0.9.0 → 0.9.1 → 0.10.0 → 0.11.0 → 0.12.0 →
-0.13.0 → 0.14.0 → 0.15.0 → 0.16.0 in order — read it top to bottom rather than jumping straight to 0.16.0, since
-0.9.0's compile break and 0.10.0's silent `ctx.translation` gate both still apply on the way up. 0.12.0 was
-the easy step (manifest bump only); 0.13.0 and 0.14.0 each added one more optional, `null`-unless-declared
-capability (`ctx.users`, `ctx.notify`); 0.15.0 fixes two real bugs — a configurable schedule that used to
-ignore its own config, and a component destroyed several times a second during playback; 0.16.0 is the audit
-release — a real compile break (`queryAcrossUsers` → declared `ctx.allUsers()`) and a security fix
-(`ctx.sanitize`) that both shipped plugins needed.
+0.13.0 → 0.14.0 → 0.15.0 → 0.16.0 → 0.17.0 in order — read it top to bottom rather than jumping straight to
+0.17.0, since 0.9.0's compile break and 0.10.0's silent `ctx.translation` gate both still apply on the way
+up. 0.12.0 was the easy step (manifest bump only); 0.13.0 and 0.14.0 each added one more optional,
+`null`-unless-declared capability (`ctx.users`, `ctx.notify`); 0.15.0 fixes two real bugs — a configurable
+schedule that used to ignore its own config, and a component destroyed several times a second during
+playback; 0.16.0 is the audit release — a real compile break (`queryAcrossUsers` → declared
+`ctx.allUsers()`) and a security fix (`ctx.sanitize`) that both shipped plugins needed; 0.17.0 is additive
+only (`DisplaySnapshot.feed`/`.season`/`.episodeNo`, `seasonScope()`) but still needs **both** the SDK bump
+and core 0.7.6 — a plugin calling `snapshot.season` against an older host's `plugin-api` jar (loaded
+parent-first) fails with `NoSuchMethodError` before the exact-`major.minor` check even gets a say.
 
 To re-check the pin yourself:
 `grep -n 'VERSION = ' mosaicast-plugin-sdk/plugin-api/src/main/java/dev/mosaicast/plugin/api/PlatformApi.java`
@@ -148,6 +151,21 @@ To re-check the pin yourself:
     a stored one as unset. Without `"min": 1`, `0` is a legal interval that turns your schedule off.
 27. **A consent category you introduce needs `consent.categoryLabels`** (0.16.0), or visitors are asked to
     consent to a bare id wrapped in a generic phrase.
+28. **An episode's `feed`/`season`/`episodeNo` are the one authoritative part of `DisplaySnapshot`** (0.17.0,
+    needs core 0.7.6+) — resolved from identity on read, not overwritten by a feed refetch like every other
+    field. Build a season scope with `seasonScope(feed, n)` / `resolveSeasonScope(snapshot)`, never
+    `` `${feed}:${season}` `` by hand, and never parse `ctx.episodeLabels` for this — it's a display string
+    that drops the season of an unnumbered episode.
+29. **`ctx.filter.current()` is live since core 0.7.6, `{}` on 0.7.5 and older, and always `{}` on a page
+    mount regardless of core version.** Treat an absent axis (`season`/`tags`/`sort`) as "unfiltered" and one
+    build runs on every core version; a page mount's query string is `ctx.route.query`, never `ctx.filter`.
+30. **`ctx.episodes` covers the whole scope since core 0.7.6** — older hosts silently stopped at 200 for a
+    `feed`/`site` scope, which under-counted a long-running show's aggregate with no error. `displayMany`
+    still clamps each *call* at `DISPLAY_BATCH_LIMIT` (200); chunk a long `ctx.episodes` yourself.
+31. **`blobs` may declare its own `readableBy`/`writableBy`, separate from `data`'s** (core 0.7.6) — absent
+    still falls back to the `data` floors, so nothing changes for an existing manifest. `application/zip` is
+    now a storable, default-allowed type; declare it by its real name, not a browser's alias
+    (`application/x-zip-compressed` etc. are canonicalised, not separately permitted).
 
 ## Before you build: ask for a browser and an instance
 
@@ -204,10 +222,11 @@ Five distinct URL namespaces, don't conflate them:
 | Web Component: `ctx` surface, `ctx.schema` queries, `ctx.blobs` uploads, `ctx.links`, `route.navigate`, doc-store HTTP calls, CSP, theme, `--mc-icon-*`, i18n | `references/frontend.md` |
 | Tests (required by the BRIEF's DoD) | `references/testing.md` |
 | Browser + live-instance setup, viewport matrix, data-safety rules, the build→install→restart loop, installing a released plugin by spec | `references/dev-environment.md` |
-| Moving an existing plugin from 0.8.x up to 0.16.0 | `references/migrating.md` |
+| Moving an existing plugin from 0.8.x up to 0.17.0 | `references/migrating.md` |
 
-Live reference implementation: **`mosaicast-plugin-sample` 2.17.0 on SDK 0.16.0** (PR #50 at the time of
-writing — check it merged and tagged before trusting it). It declares and exercises `identity`,
+Live reference implementation: **`mosaicast-plugin-sample` 2.17.0 on SDK 0.16.1** (PR #50 at the time of
+writing — check it merged and tagged before trusting it; it has **not yet** picked up 0.17.0, so its `ctx`
+has no `feed`/`season`/`episodeNo` or live `ctx.filter` to copy from). It declares and exercises `identity`,
 `notifications`, `tags`, `external`, `blobs`, `data.readsAllUsers`, bounded config, a labelled consent
 category and a four-entry `nav[]` (with `visibleTo`, not the SDK type's `role`), renders Markdown through
 `ctx.sanitize`, and uses `ctx.blobs`, `ctx.links` and `ctx.route.navigate`. Its `README.md` carries the worked
@@ -223,14 +242,16 @@ lagged it before — check its tag.
   on §17 (notifications) — **but see the flat-out wrong code block below**, which is worth reading before
   the rest of this bullet. Correct on the `data` block and `backendOwned` (§7.2), the `tags` and `external`
   blocks and their refusal shapes (§7.2), `nav[]` and the default entry a page plugin gets without one
-  (§7.2 — but see the `role`/`visibleTo` drift below), the `USER` scope, the cross-user read (still named
-`queryAcrossUsers` there — it is `ctx.allUsers()` since 0.16.0) and every
-  extension point including `SearchProvider`, `PageRouteProvider` and `UserDataHandler` (§7.4), the schema
-  provider **and its read HTTP surface** (§7.6), the `blobs` manifest block and file storage (§7.2, §11,
-  §11.1), the `?lang=` URL scheme and `hreflang` alternates (§6.4, §6.6, §12.7), site-wide search (§6.7),
-  account deletion reaching plugin data (§12.8), languages as a runtime registry and host-mediated
-  translation (§12.7, §16), and purge (§7.8). §7.5's `ctx` block lists `docs`, `feeds`, `tags`, `users`,
-  `notify`, `schema`, `blobs`, `links`, `locale.available/content`, `translation` and `route.navigate`.
+  (§7.2 — but see the `role`/`visibleTo` drift below), the `USER` scope, the cross-user read (now correctly
+  named `ctx.allUsers()`, the pre-0.16.0 `DocStore.queryAcrossUsers` kept only as a parenthetical "was") and
+  every extension point including `SearchProvider`, `PageRouteProvider` and `UserDataHandler` (§7.4), the
+  schema provider **and its read HTTP surface** (§7.6), the `blobs` manifest block and file storage (§7.2,
+  §11, §11.1), the `?lang=` URL scheme and `hreflang` alternates (§6.4, §6.6, §12.7), site-wide search
+  (§6.7), account deletion reaching plugin data (§12.8), languages as a runtime registry and host-mediated
+  translation (§12.7, §16), purge (§7.8), the live `ctx.filter` and uncapped `ctx.episodes` (§6.1, core
+  0.7.6), and `DisplaySnapshot.feed`/`.season`/`.episodeNo` as identity rather than feed presentation (§4.2,
+  §4.4, `platformApi` 0.17.0). §7.5's `ctx` block lists `docs`, `feeds`, `tags`, `users`, `notify`, `schema`,
+  `blobs`, `links`, `locale.available/content`, `translation`, `filter` and `route.navigate`.
   §6.6 says `og:locale` is the language of *that URL*, not an install-wide constant — read this before
   implementing `ShareMetadataProvider`, since it is the reason `OgMeta.locale` exists (see `backend.md`).
   Still stale on: the `"platformApi": "1.x"` example (that string does not even parse), the example's
