@@ -8,9 +8,10 @@ description: Use when cutting a release of a Mosaicast plugin, bumping its versi
 Two versions are in play and they are not the same thing:
 
 - **the plugin's own version** — SemVer, yours to choose, lives in three files
-- **`platformApi`** — the host contract the backend compiled against, currently **0.17.0** (core **0.7.6**
-  hosts it), matched by core on exact `major.minor` (patch is free to the host — but keep one string across
-  all four anchors, because the contract test and the CI drift guard compare them literally)
+- **`platformApi`** — the host contract the backend compiled against, currently **0.18.0** (core **0.7.7**
+  hosts it — a local, unreleased build at the time of writing, no `v0.7.7` tag pushed yet; re-check before
+  citing it as shipped), matched by core on exact `major.minor` (patch is free to the host — but keep one
+  string across all four anchors, because the contract test and the CI drift guard compare them literally)
 
 Getting either out of sync produces a plugin that builds cleanly and is rejected at load, quietly, with the
 reason only in the admin log viewer.
@@ -71,13 +72,13 @@ The SDK artifacts live on GitHub Packages, which **requires authentication even 
 in CI. Without it the backend build fails to resolve `dev.mosaicast:plugin-api` with a 401 that reads like
 the artifact does not exist.
 
-**0.17.0 is published** on both npm and GitHub Packages (tagged `v0.17.0`), so no workaround is needed today. If a
+**0.18.0 is published** on both npm and GitHub Packages (tagged `v0.18.0`), so no workaround is needed today. If a
 future SDK version you need is on master but **untagged**, resolve it from a local checkout instead — `mavenLocal()` after `./gradlew publishToMavenLocal` in the SDK repo, or
 `includeBuild("../mosaicast-plugin-sdk")`. Do not ship a release built that way without confirming the
 artifact is public first, or nobody else can rebuild it.
 
 **The SDK's 0.15.0 release originally shipped tagged only `0.15.0`, breaking its own `v<version>`
-convention** (every other release, `v0.17.0` and `v0.16.0` down to `v0.1.0`, has the prefix). Never affected npm/GitHub
+convention** (every other release, `v0.18.0` and `v0.17.0` down to `v0.1.0`, has the prefix). Never affected npm/GitHub
 Packages, which publish off `package.json`/`build.gradle.kts` rather than the tag. `v0.15.0` was since added
 as a second tag on the same commit, so both `git checkout v0.15.0` and `git checkout 0.15.0` resolve —
 but don't assume every future release gets this treatment; check the tag actually exists before a script

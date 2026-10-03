@@ -21,6 +21,7 @@ Translation translation();                        // null unless external.kinds 
 org.slf4j.Logger logger();                       // already named "plugin.<pluginId>"
 void onSchedule(Duration every, Runnable task);          // fixed period, captured once at register()
 void onSchedule(Supplier<Duration> every, Runnable task); // period RE-READ before every tick (0.15.0)
+default void onEpisodeReleased(Consumer<String> listener); // a planned episode just became RELEASED (0.18.0)
 ```
 
 **It's `notifier()`, not `notify()`.** ARCHITECTURE §7.4 specifies the latter, and it cannot compile:
@@ -61,6 +62,37 @@ is not. A supplier returning `null` or a non-positive `Duration`, or one that th
 its last valid period rather than dropping it — logged, never silent. The host may clamp a very short
 period to a floor it owns; treat the value you supply as a request, the same as the manifest's other
 numbers. Keep the plain `Duration` overload wherever the cadence is genuinely fixed — it is not deprecated.
+
+### `onEpisodeReleased` — hearing about a planned episode going live (0.18.0)
+
+A `default` no-op the host overrides, called with the episode's public slug once a **planned** episode binds
+to its feed item (or a confirmed suggestion, or a manual match) and its status flips `PLANNED → PUBLISHED`:
+
+```java
+ctx.onEpisodeReleased(this::open);
+ctx.onSchedule(Duration.ofMinutes(15), () ->
+    ctx.feeds().episodesIn(Scope.site()).stream()
+        .filter(slug -> ctx.feeds().display(slug).phase() == EpisodePhase.RELEASED)
+        .filter(this::stillClosed)
+        .forEach(this::open));
+```
+
+**Best effort, and only a shortcut — never the only path.** The host calls it once per release, after the
+binding transaction commits, on a host thread; a listener that throws is caught and logged against this
+plugin, and the host moves on to the next one. The event is **not durable and not replayed**: a plugin that
+was stopped, restarting or being upgraded at that exact moment never hears about that release. Always also
+reconcile on an `onSchedule` task, checking `phase()` rather than trusting the event alone — the listener
+should be idempotent, since both paths may act on the same release.
+
+**Not fired for every new episode** — only a release that was *planned first*. An episode arriving from the
+feed already released, with no prior plan, never triggers it; neither does a planned episode becoming
+`UPCOMING` (that's the clock passing `announceAt`, and nothing is written). There is no frontend equivalent
+event: the shell hands a mounted component a new `ctx` when the phase changes, so a component renders from
+`ctx.episode.phase` and lets `defineMosaicastElement` re-render it.
+
+Test it with `FakePluginContext.fireEpisodeReleased(slug)`, paired with
+`FakeFeedAccess.withPhase(slug, EpisodePhase.RELEASED)` so a lookup inside the listener sees the released
+state — see `testing.md`.
 
 ## `Scope`
 
@@ -212,24 +244,41 @@ try (InputStream in = Files.newInputStream(path)) {
 ## `FeedAccess` and `PluginConfig`
 
 ```java
-List<String>    episodesIn(Scope scope);   // access-filtered slugs; Scope.user() returns nothing
+List<String>    episodesIn(Scope scope);   // access-filtered slugs; Scope.user() returns nothing — includes `planned` ones (0.18.0)
 DisplaySnapshot display(String refId);     // not authoritative — the host overwrites it on every feed refetch
 
 <T> Optional<T> get(String key, Class<T> type);
 <T> T           get(String key, Class<T> type, T fallback);
 ```
 
+**`FeedAccess` sees `planned` episodes regardless of who is looking — this is the one place access filtering
+does not apply (0.18.0).** Preparing content before an announcement is the entire point of a planned
+episode, so your backend gets it unfiltered. That means **you** are now the access boundary for anything you
+republish: a leaderboard, a computed card, a cached aggregate built from `episodesIn`/`display` must check
+`display(slug).phase()` and withhold a `PLANNED` episode's content from anyone who is not its preparer,
+exactly the way the host withholds the episode page itself. The frontend has no equivalent gap — `ctx.feeds`
+and `ctx.episodes` stay access-filtered there (see `frontend.md`).
+
 `DisplaySnapshot(title, description, audioUrl, publishedAt, duration, imageUrl, feedImageUrl, author,
-subtitle, descriptionText, feed, season, episodeNo)` — the 13-component canonical constructor since 0.17.0 —
-plus `artwork()`, which falls back from episode image to feed image, and `seasonScope()`.
+subtitle, descriptionText, feed, season, episodeNo, phase, announceAt)` — the **15-component** canonical
+constructor since 0.18.0 — plus `artwork()`, which falls back from episode image to feed image, and
+`seasonScope()`.
 
 - **`description` is the feed's show notes verbatim — untrusted third-party HTML** (documented since 0.16.0).
   Anything that writes show notes into output — an `OgMeta` description, a `SearchHit` excerpt, a
   notification — uses **`descriptionText()`** (0.16.0), which the host reduced to plain text. Never `null`.
 - The 9-arg constructor (without `descriptionText`) still compiles, **deprecated for removal**, and leaves
-  it `""`; the 10-arg one (without `feed`/`season`/`episodeNo`) stays for a fixture that never looks at
-  seasons — a fixture that renders description text or needs the episode's place in the site should use all
-  thirteen.
+  it `""`; the 10-arg one (without `feed`/`season`/`episodeNo`) and the 13-arg one (without `phase`/
+  `announceAt`) both stay for a fixture that never looks at that part — a fixture exercising release phase
+  should use all fifteen.
+- **`phase` and `announceAt` are identity too, like `feed`/`season`/`episodeNo` (0.18.0)** — derived by the
+  host on read from the stored status, the announcement instant and the clock, never written into the
+  snapshot; a feed refetch cannot move an episode between phases any more than it can move it between
+  seasons. `phase()` is an `EpisodePhase` (`PLANNED | UPCOMING | RELEASED | WITHDRAWN`) — **branch on it,
+  never on the episode's stored `status`**, since an `UPCOMING` episode is still internally `PLANNED` but is
+  fully public. `announceAt()` is set only while `PLANNED`/`UPCOMING` with a scheduled announcement; absent
+  once released or withdrawn, and cleared automatically by `FakeFeedAccess.withPhase(...)` in tests when you
+  move an episode out of those two phases.
 - **`feed`, `season`, `episodeNo` are the one authoritative trio (0.17.0)** — resolved from `EpisodeRef`
   identity (§4.4) when the host hands the snapshot over, **never** part of what a feed refetch overwrites
   like every other field here. All three optional: absent against a feed with no season data, and
