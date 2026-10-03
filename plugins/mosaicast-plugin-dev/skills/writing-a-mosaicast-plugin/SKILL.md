@@ -1,6 +1,6 @@
 ---
 name: writing-a-mosaicast-plugin
-description: Use when creating or modifying a Mosaicast plugin (any mosaicast-plugin-* repo or the plugin-sample). Covers the plugin.json manifest (slots and placements, the page slot behind /p/<id>/*, data access floors, backendOwned keys, consent services, doc vs schema storage, the blobs file-storage block (its own optional readableBy/writableBy floors, separate from data's, and ZIP as a storable type), the tags vocabulary block, the external-services block, the identity block (ctx.users, resolving user UUIDs to a name/avatar), the notifications block (ctx.notify/ctx.notifier, putting a message in a user's inbox), nav entrances into the host menu, config fields with a localized label/description and a closed options set, the license/author/homepage/attribution credit fields), the backend PluginBackend/PluginContext contract (including onSchedule's Supplier<Duration> overload for a schedule that actually follows config) and its optional extension points (ShareMetadataProvider and its per-URL OgMeta.locale, SitemapProvider and its hreflang-alternates SitemapUrl.alternates, PageRouteProvider, SearchProvider, UserDataHandler), per-user data in the USER scope, the frontend Web Component via the SDK ctx (ctx.docs, ctx.feeds, ctx.tags, ctx.users, ctx.notify, ctx.schema reads, ctx.blobs uploads, ctx.links, ctx.locale.available/content, ctx.translation, ctx.route.navigate, the live ctx.filter and the uncapped ctx.episodes, typed ctx.api errors) plus DisplaySnapshot's feed/season/episodeNo identity fields and seasonScope()/resolveSeasonScope(), defineMosaicastElement's MosaicastHandle (a render surviving a reassigned ctx instead of being torn down) and theme tokens including the --mc-icon-* icon set, testing against the SDK test kit, and installing a plugin by spec (owner/repo@tag#sha256). Trigger whenever writing the manifest, adding a slot, wiring ctx, storing per-user data, uploading or serving files, linking to core pages, querying schema tables from the frontend, reading or writing the shared tag vocabulary, contributing to site search, handling account deletion/export, real 404s for a page plugin's unknown subpaths, declaring external-service (translation) use, declaring what language a plugin page or sitemap translation group is written in, resolving user ids to a display name/avatar, sending an in-app notification to a user, adding a nav entrance, labeling or restricting a config field, making a scheduled task follow a configurable interval, keeping a component's state across a re-rendered ctx, sanitizing HTML a plugin did not write (ctx.sanitize), aggregating over every user's data (data.readsAllUsers / ctx.allUsers), bounding a config value, labelling a consent category, navigating inside a page plugin, declaring backend-owned or schema storage, styling a plugin tile's icons, crediting a plugin's license or data source, bumping platformApi, installing or releasing a plugin, placing an episode in its season or feed for a per-season aggregate, reading the visitor's active season/tag/sort filter, storing a ZIP archive, declaring an upload floor stricter than the plugin's data floor, or building a plugin's backend or frontend.
+description: Use when creating or modifying a Mosaicast plugin (any mosaicast-plugin-* repo or the plugin-sample). Covers the plugin.json manifest (slots and placements, the page slot behind /p/<id>/*, data access floors, backendOwned keys, consent services, doc vs schema storage, the blobs file-storage block (its own optional readableBy/writableBy floors, separate from data's, and ZIP as a storable type), the tags vocabulary block, the external-services block, the identity block (ctx.users, resolving user UUIDs to a name/avatar), the notifications block (ctx.notify/ctx.notifier, putting a message in a user's inbox), nav entrances into the host menu, config fields with a localized label/description and a closed options set, the license/author/homepage/attribution credit fields), the backend PluginBackend/PluginContext contract (including onSchedule's Supplier<Duration> overload for a schedule that actually follows config) and its optional extension points (ShareMetadataProvider and its per-URL OgMeta.locale, SitemapProvider and its hreflang-alternates SitemapUrl.alternates, PageRouteProvider, SearchProvider, UserDataHandler), per-user data in the USER scope, the frontend Web Component via the SDK ctx (ctx.docs, ctx.feeds, ctx.tags, ctx.users, ctx.notify, ctx.schema reads, ctx.blobs uploads, ctx.links, ctx.locale.available/content, ctx.translation, ctx.route.navigate, the live ctx.filter, the uncapped ctx.episodes, and ctx.episode's status/phase/announceAt, typed ctx.api errors) plus DisplaySnapshot's feed/season/episodeNo/phase/announceAt identity fields, seasonScope()/resolveSeasonScope(), and onEpisodeReleased for reacting to a planned episode going live, defineMosaicastElement's MosaicastHandle (a render surviving a reassigned ctx instead of being torn down) and theme tokens including the --mc-icon-* icon set, testing against the SDK test kit, and installing a plugin by spec (owner/repo@tag#sha256). Trigger whenever writing the manifest, adding a slot, wiring ctx, storing per-user data, uploading or serving files, linking to core pages, querying schema tables from the frontend, reading or writing the shared tag vocabulary, contributing to site search, handling account deletion/export, real 404s for a page plugin's unknown subpaths, declaring external-service (translation) use, declaring what language a plugin page or sitemap translation group is written in, resolving user ids to a display name/avatar, sending an in-app notification to a user, adding a nav entrance, labeling or restricting a config field, making a scheduled task follow a configurable interval, keeping a component's state across a re-rendered ctx, sanitizing HTML a plugin did not write (ctx.sanitize), aggregating over every user's data (data.readsAllUsers / ctx.allUsers), bounding a config value, labelling a consent category, navigating inside a page plugin, declaring backend-owned or schema storage, styling a plugin tile's icons, crediting a plugin's license or data source, bumping platformApi, installing or releasing a plugin, placing an episode in its season or feed for a per-season aggregate, reading the visitor's active season/tag/sort filter, storing a ZIP archive, declaring an upload floor stricter than the plugin's data floor, preparing content for a planned/quiet episode before it is announced, reacting to an episode's release, branching on an episode's release phase, or building a plugin's backend or frontend.
 ---
 
 # Writing a Mosaicast plugin
@@ -10,40 +10,46 @@ doc and this skill disagree, see "Which docs to trust" below.
 
 ## Version pins — get these wrong and the plugin does not load
 
-Contract version is **0.17.0** (`PlatformApi.VERSION`, `PLATFORM_API_VERSION`), and core **0.7.6** hosts it.
-The host demands an **exact `major.minor`** match; patch is free. A `0.16.x` manifest is *rejected at load*,
-not warned about — and a 0.17 plugin is rejected by core 0.7.0–0.7.5, so check which core you target.
+Contract version is **0.18.0** (`PlatformApi.VERSION`, `PLATFORM_API_VERSION`), and core **0.7.7** hosts it.
+The host demands an **exact `major.minor`** match; patch is free. A `0.17.x` manifest is *rejected at load*,
+not warned about — and a 0.18 plugin is rejected by core 0.7.0–0.7.6, so check which core you target.
+
+**Core 0.7.7 is a local, unreleased build at the time of writing** — cut (`chore(release): cut 0.7.7`) but
+with one more commit on top (a preview-404 fix) and no `v0.7.7` tag pushed to `origin` yet. Treat the version
+number as real but the release itself as not yet public; re-check `git log origin/master` before citing it
+as shipped.
 
 ```json5
-"platformApi": "0.17.0"                                 // plugin.json
+"platformApi": "0.18.0"                                 // plugin.json
 ```
 ```kotlin
-compileOnly("dev.mosaicast:plugin-api:0.17.0")          // backend/build.gradle.kts
+compileOnly("dev.mosaicast:plugin-api:0.18.0")          // backend/build.gradle.kts
 compileOnly("org.pf4j:pf4j:3.16.0")
 annotationProcessor("org.pf4j:pf4j:3.16.0")             // mandatory: generates the @Extension index
-testImplementation("dev.mosaicast:plugin-testkit:0.17.0")
+testImplementation("dev.mosaicast:plugin-testkit:0.18.0")
 ```
 ```json5
-"@mosaicast/plugin-sdk": "0.17.0"                       // frontend/package.json
+"@mosaicast/plugin-sdk": "0.18.0"                       // frontend/package.json
 ```
 
-Both halves of `0.17.0` are published on npm and GitHub Packages (tag `v0.17.0`) — no `mavenLocal()`
+Both halves of `0.18.0` are published on npm and GitHub Packages (tag `v0.18.0`) — no `mavenLocal()`
 workaround needed. Maven is GitHub Packages
 (`https://maven.pkg.github.com/Mosaicast/mosaicast-plugin-sdk`), which needs a PAT with `read:packages`
 **even for public reads**. Jackson is **3.2.2** (`tools.jackson.*`), not `com.fasterxml`. **Pin the same
 string in all four places** — the CI drift guard and the manifest contract test both compare them.
 
 Coming from an older pin? `references/migrating.md` walks 0.8.0 → 0.9.0 → 0.9.1 → 0.10.0 → 0.11.0 → 0.12.0 →
-0.13.0 → 0.14.0 → 0.15.0 → 0.16.0 → 0.17.0 in order — read it top to bottom rather than jumping straight to
-0.17.0, since 0.9.0's compile break and 0.10.0's silent `ctx.translation` gate both still apply on the way
-up. 0.12.0 was the easy step (manifest bump only); 0.13.0 and 0.14.0 each added one more optional,
+0.13.0 → 0.14.0 → 0.15.0 → 0.16.0 → 0.17.0 → 0.18.0 in order — read it top to bottom rather than jumping
+straight to 0.18.0, since 0.9.0's compile break and 0.10.0's silent `ctx.translation` gate both still apply
+on the way up. 0.12.0 was the easy step (manifest bump only); 0.13.0 and 0.14.0 each added one more optional,
 `null`-unless-declared capability (`ctx.users`, `ctx.notify`); 0.15.0 fixes two real bugs — a configurable
 schedule that used to ignore its own config, and a component destroyed several times a second during
 playback; 0.16.0 is the audit release — a real compile break (`queryAcrossUsers` → declared
 `ctx.allUsers()`) and a security fix (`ctx.sanitize`) that both shipped plugins needed; 0.17.0 is additive
-only (`DisplaySnapshot.feed`/`.season`/`.episodeNo`, `seasonScope()`) but still needs **both** the SDK bump
-and core 0.7.6 — a plugin calling `snapshot.season` against an older host's `plugin-api` jar (loaded
-parent-first) fails with `NoSuchMethodError` before the exact-`major.minor` check even gets a say.
+only (`DisplaySnapshot.feed`/`.season`/`.episodeNo`, `seasonScope()`); 0.18.0 adds planned-episode awareness
+(`ctx.episode.phase`, `DisplaySnapshot.phase`/`.announceAt`, `onEpisodeReleased`) and a TS test-fixture
+compile break (`ctx.episode` now requires `phase`) — needs **both** the SDK bump and core 0.7.7, same
+`NoSuchMethodError` risk against an older host as every identity-layer addition since 0.17.0.
 
 To re-check the pin yourself:
 `grep -n 'VERSION = ' mosaicast-plugin-sdk/plugin-api/src/main/java/dev/mosaicast/plugin/api/PlatformApi.java`
@@ -166,6 +172,26 @@ To re-check the pin yourself:
     still falls back to the `data` floors, so nothing changes for an existing manifest. `application/zip` is
     now a storable, default-allowed type; declare it by its real name, not a browser's alias
     (`application/x-zip-compressed` etc. are canonicalised, not separately permitted).
+32. **A `planned` episode is invisible below podcaster — on both sides, but not symmetrically.** The
+    frontend never sees one at all: it is absent from `ctx.episodes`, and `ctx.feeds.display`/`displayMany`
+    answer `null`/drop it for that visitor, same as any other access-filtered episode. Your **backend**'s
+    `FeedAccess` sees it regardless of who is looking, because preparing content before an announcement is
+    the point — so a backend that republishes what it reads (a leaderboard, a computed card) must check
+    `DisplaySnapshot.phase()` itself before handing a `planned` episode's content to anyone who is not its
+    preparer. Branch on **`phase`** (`EpisodePhase`/`DisplaySnapshot.phase`), never on the stored `status` —
+    an `UPCOMING` episode is still `status == PLANNED` but is public.
+33. **`ctx.onEpisodeReleased` is a best-effort shortcut, never the only path.** It fires once, after the
+    binding commits, on a host thread — not durable, not replayed, and never called for an episode that
+    arrives already released. A plugin that was stopped, restarting or mid-upgrade at the moment of release
+    simply never hears about it. Always pair it with a periodic `onSchedule` reconciliation that checks
+    `phase() == RELEASED` for anything your plugin still treats as pending, and make the listener idempotent
+    — the event and the reconciliation may both act on the same release.
+34. **`ctx.episode` now requires `phase`, and `status` is actually filled (0.18.0, needs core 0.7.7).**
+    Before, core left `status` empty despite the SDK declaring it — a hand-built test fixture
+    (`episode: { status: 'PLANNED' }`) silently asserted nothing. `makeMockEpisode(phase, announceAt?)`
+    builds a correct one; a literal missing `phase` now fails `tsc --noEmit`, the same trap every `ctx`
+    member gain springs. There is still no frontend release *event* — a phase change arrives as a new `ctx`,
+    same mechanism as a route or filter change.
 
 ## Before you build: ask for a browser and an instance
 
@@ -222,18 +248,17 @@ Five distinct URL namespaces, don't conflate them:
 | Web Component: `ctx` surface, `ctx.schema` queries, `ctx.blobs` uploads, `ctx.links`, `route.navigate`, doc-store HTTP calls, CSP, theme, `--mc-icon-*`, i18n | `references/frontend.md` |
 | Tests (required by the BRIEF's DoD) | `references/testing.md` |
 | Browser + live-instance setup, viewport matrix, data-safety rules, the build→install→restart loop, installing a released plugin by spec | `references/dev-environment.md` |
-| Moving an existing plugin from 0.8.x up to 0.17.0 | `references/migrating.md` |
+| Moving an existing plugin from 0.8.x up to 0.18.0 | `references/migrating.md` |
 
-Live reference implementation: **`mosaicast-plugin-sample` 2.17.0 on SDK 0.16.1** (PR #50 at the time of
-writing — check it merged and tagged before trusting it; it has **not yet** picked up 0.17.0, so its `ctx`
-has no `feed`/`season`/`episodeNo` or live `ctx.filter` to copy from). It declares and exercises `identity`,
-`notifications`, `tags`, `external`, `blobs`, `data.readsAllUsers`, bounded config, a labelled consent
-category and a four-entry `nav[]` (with `visibleTo`, not the SDK type's `role`), renders Markdown through
-`ctx.sanitize`, and uses `ctx.blobs`, `ctx.links` and `ctx.route.navigate`. Its `README.md` carries the worked
-`curl` forgery that motivates `backendOwned`, and its `docs/BRIEF.md` pattern is the definition of done for
-every plugin repo. For foreign HTML that must keep the plugin's own `class`/`data-*` markup, the pattern to
-copy is `mosaicast-plugin-wiki` 0.5.0's `markdown.ts`. The sample moves independently of the SDK and has
-lagged it before — check its tag.
+Live reference implementation: **`mosaicast-plugin-sample` 2.19.0 on SDK 0.18.0** (check it merged and
+tagged before trusting it — it has lagged the SDK before). Fully caught up this time: its `ctx` exercises
+`feed`/`season`/`episodeNo`, the live `ctx.filter`, and declares `identity`, `notifications`, `tags`,
+`external`, `blobs`, `data.readsAllUsers`, bounded config, a labelled consent category and a four-entry
+`nav[]` (with `visibleTo`, not the SDK type's `role`), renders Markdown through `ctx.sanitize`, and uses
+`ctx.blobs`, `ctx.links` and `ctx.route.navigate`. Its `README.md` carries the worked `curl` forgery that
+motivates `backendOwned`, and its `docs/BRIEF.md` pattern is the definition of done for every plugin repo.
+For foreign HTML that must keep the plugin's own `class`/`data-*` markup, the pattern to copy is
+`mosaicast-plugin-wiki` 0.5.0's `markdown.ts`.
 
 ## Which docs to trust
 
@@ -249,9 +274,12 @@ lagged it before — check its tag.
   §11, §11.1), the `?lang=` URL scheme and `hreflang` alternates (§6.4, §6.6, §12.7), site-wide search
   (§6.7), account deletion reaching plugin data (§12.8), languages as a runtime registry and host-mediated
   translation (§12.7, §16), purge (§7.8), the live `ctx.filter` and uncapped `ctx.episodes` (§6.1, core
-  0.7.6), and `DisplaySnapshot.feed`/`.season`/`.episodeNo` as identity rather than feed presentation (§4.2,
-  §4.4, `platformApi` 0.17.0). §7.5's `ctx` block lists `docs`, `feeds`, `tags`, `users`, `notify`, `schema`,
-  `blobs`, `links`, `locale.available/content`, `translation`, `filter` and `route.navigate`.
+  0.7.6), `DisplaySnapshot.feed`/`.season`/`.episodeNo` as identity rather than feed presentation (§4.2,
+  §4.4, `platformApi` 0.17.0), and **now also current on planned episodes** — quiet-by-default creation,
+  the derived `EpisodePhase`, `onEpisodeReleased` and the backend-sees-it/frontend-doesn't visibility split
+  (§4.3, §5.3, §7.4, §7.5, `platformApi` 0.18.0). §7.5's `ctx` block lists `docs`, `feeds`, `tags`, `users`,
+  `notify`, `schema`, `blobs`, `links`, `locale.available/content`, `translation`, `filter`, `episode`
+  (`status`/`phase`/`announceAt`) and `route.navigate`.
   §6.6 says `og:locale` is the language of *that URL*, not an install-wide constant — read this before
   implementing `ShareMetadataProvider`, since it is the reason `OgMeta.locale` exists (see `backend.md`).
   Still stale on: the `"platformApi": "1.x"` example (that string does not even parse), the example's
@@ -267,6 +295,17 @@ lagged it before — check its tag.
   (TS) / `List<UUID> send(...)` (Java) and `NotifyMessage.text` as a `locale → sentence` map built with
   `notifyText(catalogs, key, params)`. The prose in §17 (the eligibility rule, the rate-limit shape,
   in-app-only) is accurate; only this one code block is not.
+- **This skill's own prior claim that `ctx.episode` is never populated is now wrong — core 0.7.7 wired it.**
+  Earlier skill revisions (correctly, at the time) said `status` was declared but always empty and told you
+  never to branch on it. As of `platformApi` 0.18.0 / core 0.7.7, `ctx.episode = { status, phase,
+  announceAt? }` is real on the `episode` scope, `phase` is what to branch on, and a phase change arrives as
+  a freshly-assigned `ctx` (no separate event). If you find a copy of this skill still saying the field is
+  dead, re-verify against the current core rather than trusting either claim blindly.
+- **The SDK's `PluginBlobsDeclaration` TS type has existed since 0.9.0 — a prior claim in `frontend.md` that
+  there is "no TS type for the manifest's `blobs` block" was simply wrong, not just stale.** It documents
+  `maxFileBytes`/`quotaBytes`/`mimeTypes` and, since 0.18.0, the optional `readableBy`/`writableBy` pair —
+  core still owns validation and is still authoritative on rejection, but the type exists for editor
+  autocomplete and was never absent.
 - **The SDK's `PluginNavDeclaration` TS type disagrees with core on one field name.** The TS type
   (documentation-only, like the rest of `PluginManifest`) calls it `role`; core's `NavEntry` record — what
   actually parses `plugin.json` — calls it `visibleTo`. Write `visibleTo`; core is authoritative on the
