@@ -111,8 +111,9 @@ To re-check the pin yourself:
     a slot. Write `visibleTo` in `plugin.json`; core wins over the SDK type on any disagreement.
 17. **Prefer `ctx.docs`/`ctx.feeds`/`getOrNull` over hand-built paths and swallowed 404s.** An unset key is a
     **204** since core 0.7.4 (404 now means a wrong address); `ctx.docs.get` resolves `null` for it, and the
-    client dedupes in-flight reads and remembers misses for you (0.16.0) — delete your own miss cache. Many
-    scopes at once: `ctx.docs.getMany(type, ids, keys)`.
+    client dedupes in-flight reads and remembers misses **briefly** (~30 s, never across a navigation, core
+    0.7.5) — delete your own miss cache, and re-read on your own cadence a key your backend or another session
+    writes later. Many scopes at once: `ctx.docs.getMany(type, ids, keys)`.
     `ctx.feeds.display`/`displayMany` replace a scheduled ingest that copies episode snapshots into your own
     doc store — read them live, they are not authoritative and the host overwrites them on every refetch.
 18. **`ctx.users` resolves, it does not enumerate, and its answer is absent-not-redacted.** An unknown,

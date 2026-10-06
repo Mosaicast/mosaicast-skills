@@ -111,8 +111,8 @@ repositories {
 
 dependencies {
     compileOnly("dev.mosaicast:plugin-api:0.16.0")
-    compileOnly("org.pf4j:pf4j:3.15.1")
-    annotationProcessor("org.pf4j:pf4j:3.15.1")   // generates the extension index — without it nothing loads
+    compileOnly("org.pf4j:pf4j:3.16.0")
+    annotationProcessor("org.pf4j:pf4j:3.16.0")   // generates the extension index — without it nothing loads
     testImplementation(platform("org.junit:junit-bom:6.1.3"))
     testImplementation("org.junit.jupiter:junit-jupiter")
     testImplementation("dev.mosaicast:plugin-testkit:0.16.0")

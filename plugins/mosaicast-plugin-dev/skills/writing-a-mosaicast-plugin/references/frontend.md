@@ -281,10 +281,12 @@ instead of costing a round trip you then read a 400 body to explain. Everything 
 `backendOwned`, the 400 on an unknown scope, the 401 on an anonymous `user` request — is unchanged and still
 the host's to enforce; `ctx.api` remains the escape hatch for anything `ctx.docs` does not cover.
 
-**What the client remembers for you — guaranteed since 0.16.0**, per plugin and signed-in identity, for the
-life of the page: identical `get`s in flight share one request; a miss (the 204) is remembered, `getMany`
-misses included; your own `put`/`remove` forget the address they touched; **hits are never cached**; errors
-are never remembered. So **delete any miss cache you wrote around `ctx.docs`** — it is redundant — and keep a
+**What the client remembers for you — guaranteed since 0.16.0**, per plugin and signed-in identity: identical
+`get`s in flight share one request; a miss (the 204) is remembered **briefly** — about 30 s and never across a
+navigation, `getMany` misses included (core 0.7.5; it used to be the life of the page, which hid a leaderboard
+the backend publishes later, or a game another session creates, until a reload); your own `put`/`remove`
+forget the address they touched; **hits are never cached**; errors are never remembered. A component waiting
+for a key to *appear* while the visitor stays on one page re-reads it on its own cadence. So **delete any miss cache you wrote around `ctx.docs`** — it is redundant — and keep a
 hit cache, if at all, no longer than a render: it hides writes made in other sessions. Before this, 98% of one
 real session's plugin requests were "not set", one key asked 178 times.
 
