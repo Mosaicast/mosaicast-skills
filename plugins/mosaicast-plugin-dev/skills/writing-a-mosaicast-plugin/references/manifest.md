@@ -13,7 +13,7 @@ rejected.
 {
   "id": "sample",
   "version": "2.17.0",
-  "platformApi": "0.18.0",
+  "platformApi": "0.19.0",
   "name": "Sample",
   "license": "Apache-2.0",
   "author": "The Mosaicast Authors",
@@ -98,14 +98,24 @@ needs a signed-in user to belong to). Defaults when the block or a field is abse
 So a plugin with an anonymous display slot and no `data` block **403s on reads**; if the data really is
 public, say `"readableBy": "anonymous"` explicitly.
 
-One floor pair, **four** surfaces: `readableBy` also governs the schema read API
-(`/api/plugins/<id>/schema/*`), blob reads (`…/blob`, `…/blob/{ref}`, `…/blob/quota`) and every call
-through `ctx.tags` — reads and writes alike, layered under the tags block's own
-`readsVocabulary`/`writesEpisodes` gate; `writableBy` governs blob uploads/deletes and the tags writes
-alongside that same gate. There are no schema writes over HTTP, so `writableBy` has no schema counterpart,
-and `backendOwned` does not reach the blob or tags surfaces at all — neither lets a caller name an existing
-key or row belonging to someone else (a blob ref is a host-minted UUID; a tags write is scoped to your own
-subjects, or recorded with your plugin as its source).
+One floor pair, several surfaces: `readableBy` also governs blob reads (`…/blob`, `…/blob/{ref}`,
+`…/blob/quota`, unless `blobs` declares its own — see below) and every call through `ctx.tags` — reads and
+writes alike, layered under the tags block's own `readsVocabulary`/`writesEpisodes` gate; `writableBy`
+governs blob uploads/deletes and the tags writes alongside that same gate. `backendOwned` does not reach the
+blob or tags surfaces at all — neither lets a caller name an existing key or row belonging to someone else
+(a blob ref is a host-minted UUID; a tags write is scoped to your own subjects, or recorded with your
+plugin as its source).
+
+**The schema read API is its own floor since 0.19.0 — `storage.schemaReadableBy`, not `data.readableBy`.**
+Before, `readableBy` governed `/api/plugins/<id>/schema/*` the same way it governed everything else; a
+plugin whose tile had to be anonymous (bingo) therefore also served every schema row to anonymous visitors
+— player entries keyed by user id, rows for a quiet planned episode. `storage.schemaReadableBy` defaults to
+`data.readableBy` when absent, so nothing changes for an existing manifest that never needed the split; see
+"`storage`" below. There are no schema writes over HTTP either way, so `writableBy` still has no schema
+counterpart.
+
+**Per-key floors since 0.19.0: `data.keyFloors`.** The two floors above cover every key uniformly;
+`keyFloors` raises *specific* keys above them — see below.
 
 **`identity` and `notifications` sit outside this floor pair entirely** — neither `readableBy` nor
 `writableBy` governs `ctx.users` or `ctx.notify`. Resolving users has no role floor at all (see `identity`
@@ -165,6 +175,46 @@ Three consequences worth internalising:
 A bare `*` makes `writableBy` vestigial for shared scopes, but it is still required and still may not be
 `anonymous`.
 
+### `keyFloors` (0.19.0)
+
+```json
+"keyFloors": [
+  { "keys": ["import:*", "staged:*"], "readableBy": "podcaster" },
+  { "keys": ["bundles"], "writableBy": "admin" }
+]
+```
+
+Raises the read or write floor of specific keys above the plugin's own `readableBy`/`writableBy` — private
+bookkeeping beside public numbers, or an admin-only setting beside podcaster-writable ones, without
+splitting the plugin into two manifests. Same selector grammar as `backendOwned`
+(`DOC_KEY_SELECTOR_PATTERN`, an alias of `BACKEND_OWNED_PATTERN` — identical pattern, both names load): an
+exact key, a `prefix*`, or the bare `*`.
+
+**Rejected at load, every one of them:**
+- a floor **below** the plugin's own `readableBy`/`writableBy` — raise-only, always
+- `writableBy: "anonymous"` — same rule as the plugin-level floor
+- an entry with no `keys`
+- an entry raising neither `readableBy` nor `writableBy`
+- a selector that isn't an exact key, a `prefix*`, or `*`
+
+**At runtime:**
+- Several entries matching one key combine to the **strictest** floor, per direction, independently.
+- **Write order is plugin floor → `backendOwned` → key floor** — a `backendOwned` key stays client-unwritable
+  no matter what its key floor says; a key floor cannot loosen what `backendOwned` closed.
+- A **listing** (`GET .../data/{scopeType}/{scopeId}?prefix=…`) drops a key below the caller's floor
+  *before* paging, so `totalElements` counts only what that caller may see — not "everything, minus a few
+  redactions after the fact."
+- A **batch read** (`getMany`) leaves a hidden key **absent**, indistinguishable from a miss.
+- A **single** `get`/`put`/`remove` on a key below its floor is a **403** with its own problem type,
+  `PROBLEM_TYPES.keyFloor` (`…/problems/key-floor`) — distinct from the plugin-floor `forbidden` and the
+  `backendOwned` `backend-owned-key`, so a client can tell the three 403s apart without matching English.
+- **Ignored for the `USER` scope**, same as `backendOwned`. **Your own `ctx.store()` is unaffected** — a key
+  floor is a client-facing rule only; the backend reads and writes every key regardless.
+
+A plugin that under-declares a floor here is not quietly fine on an older host: a host older than 0.19.0
+doesn't know the field at all, ignores it, and serves those keys at the plugin's *wider* floor — which is
+exactly why this shipped in a `platformApi` minor rather than as a patch.
+
 ## `storage` — doc (default) or schema
 
 Absent ⇒ `"doc"`. The doc store is `plugin_data`: scope + key → JSONB, GIN-indexed, addressed by scope and
@@ -183,11 +233,17 @@ storage, or that only the backend can reach it, is obsolete:
     "views":     "integer",
     "updatedAt": "timestamp:indexed"
   }
-} }
+}, "schemaReadableBy": "podcaster" }
 ```
 
 - The **bare string `"schema"` is still rejected**: *"storage declares \"schema\" but no entities; use
   \"doc\" or declare at least one"*. Any other unrecognised string silently becomes `doc`.
+- **`schemaReadableBy` (0.19.0) is the schema read API's own floor** — `select`/`search`/`count`/one row,
+  all four gated the same way — defaulting to `data.readableBy` when absent, so an existing manifest is
+  unaffected. Any of the four roles is legal (same vocabulary as `blobs.readableBy`); a value outside them
+  is *"storage.schemaReadableBy '%s' is not one of […]"*, rejected at load exactly like a bad `blobs` floor.
+  Declare it when your **tile** needs to be anonymous but your **rows** should not be — the backend's
+  `SchemaStore` is unaffected either way; this is an HTTP read-API floor only.
 - Types → SQL: `string`/`text` → `text`, `integer` → `bigint`, `number` → `double precision`, `boolean`,
   `timestamp` → `timestamptz`.
 - Modifiers: `indexed`, `unique` (implies a unique index), `fulltext` (GIN over
@@ -540,6 +596,12 @@ A **service-level** declaration. The legacy `{ categories, externalSources }` sh
 `data.backendOwned entry '%s' is not usable` · `blobs limits must be positive; got %s` ·
 `blobs.mimeTypes is present but names no type` · `blobs.mimeTypes may not include image/svg+xml` ·
 `blobs floor '%s' is not one of […]` · `blobs.writableBy may not be 'anonymous'` ·
+`data.keyFloors entry names no keys` · `data.keyFloors selector '%s' is not usable: it must be an exact key,
+a prefix ending in *, or the bare *` · `data.keyFloors entry for %s raises neither readableBy nor writableBy`
+· `data.keyFloors floor '%s' is not one of […]` · `data.keyFloors writableBy may not be 'anonymous' — a
+write needs a signed-in user` · `data.keyFloors readableBy '%s' for %s is below the plugin's read floor '%s'`
+· `data.keyFloors writableBy '%s' for %s is below the plugin's write floor '%s'` (0.19.0) ·
+`storage.schemaReadableBy '%s' is not one of […]` (0.19.0) ·
 `tags block asks for nothing (readsVocabulary and writesEpisodes are both false)` ·
 `external block declares no kinds` · `external kind '%s' is not one of […]` ·
 `external.usedBy '%s' is not one of […]` (`external.usedBy: anonymous` loads fine but logs a warning) ·

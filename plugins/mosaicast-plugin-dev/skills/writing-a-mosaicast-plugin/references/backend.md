@@ -22,6 +22,7 @@ org.slf4j.Logger logger();                       // already named "plugin.<plugi
 void onSchedule(Duration every, Runnable task);          // fixed period, captured once at register()
 void onSchedule(Supplier<Duration> every, Runnable task); // period RE-READ before every tick (0.15.0)
 default void onEpisodeReleased(Consumer<String> listener); // a planned episode just became RELEASED (0.18.0)
+default void onEpisodePhaseChanged(BiConsumer<String, EpisodePhase> listener); // any write-driven phase change, incl. becoming null on cancel (0.19.0)
 ```
 
 **It's `notifier()`, not `notify()`.** ARCHITECTURE §7.4 specifies the latter, and it cannot compile:
@@ -94,6 +95,44 @@ Test it with `FakePluginContext.fireEpisodeReleased(slug)`, paired with
 `FakeFeedAccess.withPhase(slug, EpisodePhase.RELEASED)` so a lookup inside the listener sees the released
 state — see `testing.md`.
 
+### `onEpisodePhaseChanged` — the direction `onEpisodeReleased` can't cover (0.19.0)
+
+`onEpisodeReleased` only ever fires on one direction: an episode becoming visible. `onEpisodePhaseChanged`
+fires on **every** write-driven phase change, which is what you need if your backend publishes anything on
+a schedule rather than computing it per request:
+
+```java
+ctx.onEpisodePhaseChanged((slug, phase) -> {
+    if (phase == null || phase == EpisodePhase.PLANNED || phase == EpisodePhase.WITHDRAWN) {
+        republishIndex();          // drop it from what anonymous readers see, right now
+    }
+});
+```
+
+**Why this exists, specifically:** a podcaster can push an announced episode's `announceAt` back into the
+future, and it becomes `PLANNED` again — hidden from everyone below podcaster **at once**. Anything you
+compute **per request** (a sitemap, `ShareMetadataProvider`, `PageRouteProvider`, `SearchProvider`) is
+already correct, because each of those calls `FeedAccess.display(slug)` fresh every time. Anything you
+**stored** on a schedule — a site-wide index, a count, a teaser card — keeps naming that episode to
+anonymous readers until your next tick, otherwise. This hook closes that gap.
+
+**When it fires:** the host compares the phase just before a write with the phase just after, at the same
+instant, and calls this only when they differ — an announce, an `announceAt` edit in *either* direction, a
+release, a withdrawal, a withdrawn episode coming back, and a cancellation. On cancellation the listener
+receives `phase == null`: the episode no longer exists, its episode-scoped documents are already gone with
+it, but anything your *other* scopes say about it (that site-wide index again) is yours to drop.
+
+**When it does not fire:** the clock passing `announceAt` on its own involves no write, so nothing calls
+this for a `PLANNED → UPCOMING` transition — that direction only makes an episode *more* visible, and being
+briefly late about it is harmless. Reconcile that direction on your schedule, same as always.
+
+A release is also a phase change, so if you register both, **`onEpisodeReleased` listeners run first**, then
+`onEpisodePhaseChanged` ones. Delivery is otherwise identical: once per change, after the transaction
+commits, on a host thread, best effort — not durable, not replayed, keep the listener idempotent.
+
+Test it with `FakePluginContext.fireEpisodePhaseChanged(slug, phase)` (`phase == null` for the cancellation
+case) and `episodePhaseListenerCount()` to assert a plugin subscribed at all — see `testing.md`.
+
 ## `Scope`
 
 ```java
@@ -137,6 +176,10 @@ List<DocEntry>      query(Scope scope, String keyPrefix);
 - `DocEntry(String key, JsonNode value)` — `tools.jackson.databind.JsonNode`.
 - **`DocStore` lost `queryAcrossUsers` in 0.16.0** and has otherwise not changed since 0.5.0.
   `backendOwned` is enforced by the host on the HTTP surface only; your backend keeps writing those keys.
+- **`data.keyFloors` (0.19.0, manifest-only) is the same story.** Like `backendOwned`, it is an HTTP-surface
+  rule — `ctx.store()` reads and writes every key regardless of any floor declared on it. See `manifest.md`
+  for the selector grammar, the raise-only rule, and the three places a hidden key behaves differently
+  (listing, batch read, single read/write).
 
 ### Aggregates across users — `ctx.allUsers()`, declared (0.16.0)
 
@@ -198,6 +241,11 @@ Since 0.7.0 the frontend **can read** these tables through `ctx.schema` (`select
 same vocabulary, `page`/`size` paging) — projecting the corpus into doc keys for the UI is obsolete. It
 stays **read-only** over HTTP: your backend is the only writer of relational truth. A frontend that must
 write puts a document in the doc store and this backend ingests it in `onSchedule(...)`.
+
+**That HTTP read surface has its own floor since 0.19.0 — `storage.schemaReadableBy`**, defaulting to
+`data.readableBy` when the manifest leaves it out. It is a manifest-level, HTTP-only rule exactly like
+`keyFloors` above: `SchemaStore` here, in your backend, is **unaffected** by it either way — this table is
+yours, unconditionally, from the moment provisioning finishes.
 
 Note the two shapes that differ from the Java side, so a test written against one does not mislead you on
 the other: the frontend's `find` resolves `null` for a missing row (Java returns `Optional.empty()`), and an
@@ -285,6 +333,12 @@ constructor since 0.18.0 — plus `artwork()`, which falls back from episode ima
   `episodeNo` absent for an unnumbered episode inside a numbered season (never infer one from the other).
   `seasonScope()` returns `Scope.season(feed, season)`, or `null` when either is missing — prefer it over
   reading the two fields and building the scope yourself.
+- **`season`/`episodeNo` are "as the site places the episode," not purely `itunes:*` any more (core 0.7.7,
+  documented as of 0.19.0).** A podcaster can set either by hand in the admin — a prologue a show calls
+  "episode 0," which `itunes:episode` structurally cannot carry, is the case this exists for. The hand-set
+  value wins, survives every later feed poll, and **may be `0`**. Checking `if (episodeNo != null)` is
+  right; checking `if (episodeNo != 0)` or (TS) `if (episodeNo)` is a bug that only shows up on exactly the
+  episodes this feature exists to support.
   ```java
   var snaps = episodeSlugs.stream().map(ctx.feeds()::display).filter(Objects::nonNull).toList();
   for (var snap : snaps) {
@@ -454,6 +508,8 @@ boolean               hasRoute(String subpath);          // PageRouteProvider �
 List<SearchHit>       search(String query, Role role, int limit);   // SearchProvider — site-wide search (0.9.0)
 void                  eraseUser(String userId);          // UserDataHandler — account deletion reaches you (0.9.0)
 Optional<Map<String,Object>> exportUser(String userId);  // UserDataHandler — defaulted to Optional.empty()
+Optional<UserExport>  exportFiles(String userId);        // UserDataHandler — this plugin's part of a GDPR
+                                                          // export, as files (0.19.0, wired by core 0.8.0)
 ```
 
 Since core 0.6.7 the host uses PF4J's `SingletonExtensionFactory`, so **all your extension points run on the
@@ -507,12 +563,41 @@ is correct.
   where the host does not filter for you** — it has no model of your objects, so returning a draft page to
   an anonymous visitor is a leak nothing else catches. Results name a `subpath` under `/p/<id>/`; the host
   resolves the URL and drops `.`/`..` segments the same way `ctx.route.navigate` does.
-- **`UserDataHandler.eraseUser`/`exportUser`** (core 0.9.0 host): asked before an account row is dropped.
-  Erase or pseudonymise is **your call** — the host cannot make it; keep the identity link cut but the
-  contribution intact where an aggregate (a leaderboard, a vote count) must stay correct, hard-delete where
-  the content itself is the person's. **Must be idempotent** — a failed deletion is retried, and the host
-  reports a receipt (complete, plus what has not finished) rather than a bare success. `exportUser` defaults
-  to `Optional.empty()` and is called independently of erasure, for a data-export request in its own right.
+- **`UserDataHandler.eraseUser`/`exportUser`/`exportFiles`** (core 0.9.0 host; `exportFiles` since SDK
+  0.19.0, wired by core 0.8.0): asked before an account row is dropped. Erase or pseudonymise is **your
+  call** — the host cannot make it; keep the identity link cut but the contribution intact where an
+  aggregate (a leaderboard, a vote count) must stay correct, hard-delete where the content itself is the
+  person's. **Must be idempotent** — a failed deletion is retried, and the host reports a receipt (complete,
+  plus what has not finished) rather than a bare success.
+  - **`exportFiles` is now the real GDPR export path (ARCHITECTURE §12.8.1); `exportUser` is its fallback,
+    not a separate feature.** The host asks `exportFiles` first; an empty `Optional` (its default) makes it
+    ask `exportUser` instead and write a non-empty map as `plugins/<id>/data.json` — so a plugin written
+    against the old `Map` form keeps exporting with zero changes, and a plugin with a real export just
+    implements `exportFiles` and leaves `exportUser` at its default:
+    ```java
+    @Override
+    public Optional<UserExport> exportFiles(String userId) {
+        List<Card> cards = cardsOf(userId);
+        if (cards.isEmpty()) return Optional.empty();
+        return Optional.of(UserExport.of(
+                ExportFile.text("cards.json", "application/json", toBingoV1(cards))));
+    }
+    ```
+  - **Bounded, and never truncated.** At most `UserExport.MAX_BYTES` (32 MiB) across every `ExportFile`,
+    answered within `UserExport.TIMEOUT` (60 s); go over either and the host records this plugin's part as
+    **`failed`** rather than handing over a partial export that reads as a complete one. `ExportFile(path,
+    mediaType, bytes)` paths must match `ExportFile.PATH_PATTERN` (relative, no `.`/`..` segment) — the host
+    packs every file under `plugins/<id>/` in one ZIP alongside what core holds directly.
+  - **Only this person's data, same discipline as erasure.** A leaderboard row that merely *mentions* the
+    requester is not theirs to hand over — the host has no way to check this, so it is entirely on you.
+    **Read-only**: the export may be retried, and a person may ask again tomorrow; a call must change
+    nothing it reads.
+  - **Every outcome is recorded, never silent.** `complete` (handed over data), `empty` (asked, had
+    nothing), `failed` (threw, timed out, or went over the byte cap), `outstanding` (plugin switched off or
+    rejected — asked again once it's back), and **`not-supported`** for a plugin with no `UserDataHandler`
+    at all — core cannot tell "holds nothing" from "never implemented this," so it says which.
+  - Called independently of `eraseUser` either way — an export is a request in its own right, and one
+    missing the plugin half is an incomplete answer to a legal one.
 - A provider that throws is logged and skipped; it can never break a render, the sitemap, a page route or a
   search page. Disabling the plugin removes its sitemap URLs and OG tags immediately, and — because
   `UserDataHandler` is asked whenever a plugin has ever stored anything, not only while it is active — a

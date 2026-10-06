@@ -91,14 +91,16 @@ theme: ThemeTokens
 Also exported: `PLATFORM_API_VERSION`, `SELF_SCOPE_ID` (`'me'`), `DataScopeType`, `DocEntry<T>`,
 `PagedDocs<T>`, `PluginRoute`, `PluginLinks`, `SchemaClient`/`SchemaQuery`/`SchemaPredicate`/`SchemaOp`/
 `SchemaPage<T>`, `BlobClient`/`BlobInfo`/`BlobPage`/`BlobQuota`, `DocClient`/`DocTarget`/`DOC_KEY_PATTERN`,
+`DOC_KEY_SELECTOR_PATTERN` (0.19.0 — the `backendOwned`/`keyFloors[].keys` selector grammar),
 `FeedsClient`/`DISPLAY_BATCH_LIMIT`, `TagsClient`/`TagInfo`, `UserDirectory`/`UserRef`,
 `NotifyClient`/`NotifyMessage`/`notifyText`, `TranslationClient`/`TranslationRequest`/
 `TranslationResult`, `LocaleInfo`, `PluginApiError`/`isPluginApiError`/`ProblemDetail`,
-`EpisodeStatus`/`EpisodePhase` (0.18.0), `resolveArtwork(snapshot)`, `seasonScope(feed, n)`/
-`resolveSeasonScope(snapshot)` (0.17.0), `matchRoute(path, patterns)`, `iconCss`/`iconMask`,
-`createPluginI18n`, and the documentation-only manifest types (`PluginManifest`,
+`PROBLEM_TYPES` (0.19.0), `EpisodeStatus`/`EpisodePhase` (0.18.0), `resolveArtwork(snapshot)`,
+`seasonScope(feed, n)`/`resolveSeasonScope(snapshot)` (0.17.0), `matchRoute(path, patterns)`,
+`iconCss`/`iconMask`, `createPluginI18n`, and the documentation-only manifest types (`PluginManifest`,
 `PluginTagsDeclaration`, `PluginExternalDeclaration`, `ExternalServiceKind`, `PluginNavDeclaration`,
-`PluginIdentityDeclaration`, `PluginNotificationsDeclaration`, `PluginBlobsDeclaration`, …).
+`PluginIdentityDeclaration`, `PluginNotificationsDeclaration`, `PluginBlobsDeclaration`,
+`PluginKeyFloorDeclaration` (0.19.0), …).
 **`PluginBlobsDeclaration` has existed since 0.9.0** (`maxFileBytes`/`quotaBytes`/`mimeTypes`, plus the
 optional `readableBy`/`writableBy` pair since 0.18.0) — a prior revision of this skill claimed there was no
 TS type for the `blobs` block at all; that was simply wrong, not just stale. Core still validates and is
@@ -106,7 +108,7 @@ still authoritative on rejection; the type exists only for editor autocomplete.
 
 ## What the host actually supplies today
 
-Verified against core's `frontend/src/plugins/buildCtx.ts` and `PluginMount.tsx` at 0.7.7 — assume this
+Verified against core's `frontend/src/plugins/buildCtx.ts` and `PluginMount.tsx` at 0.8.0 — assume this
 until core says otherwise. **`docs`, `feeds`, `tags`, `users`, `notify`, `schema`, `blobs`, `translation`,
 `locale.available/content`, `consent.has/granted/request`, `filter` (since 0.7.6) and, since 0.7.7, `episode`
 are real, wired implementations** — the "contract ahead of implementation" gap 0.9.0 shipped with has closed
@@ -150,8 +152,11 @@ is not hitting the four-times-a-second case the SDK's example was written agains
 - **`ctx.episodes` covers the whole scope, not just the first 200 (core 0.7.6, core#248).** Before, a `feed`
   or `site` scope silently stopped at 200 episodes — an aggregate over a long-running show (a per-season
   speaking-share chart) was quietly wrong past that point, with no error and no truncation flag. The shell
-  now pages the host's scope resolution to the end. `FeedsClient.displayMany` keeps its own, separate
-  `DISPLAY_BATCH_LIMIT` (200) clamp per *call* — chunk `ctx.episodes` yourself if it is longer than that.
+  now pages the host's scope resolution to the end. **`FeedsClient.displayMany` stopped clamping at 0.19.0**
+  (core 0.8.0) — past `DISPLAY_BATCH_LIMIT` (200) it splits into several requests and merges them, same
+  guarantee `ctx.docs.getMany` already had; a failed chunk rejects the whole call. Delete any hand-rolled
+  slicing of `ctx.episodes` before `displayMany` on 0.19.0+ — it's dead code there, and on an older host it
+  was quietly dropping episodes past 200 rather than protecting anything.
 - **A `planned` episode never reaches a visitor below podcaster, on the frontend, full stop (0.18.0).** It is
   absent from `ctx.episodes`, and `ctx.feeds.display`/`displayMany` answer `null`/drop it, same as any other
   access-filtered episode — `display()` still cannot tell "no snapshot" from "not visible," so do not try.
@@ -191,7 +196,15 @@ Status codes worth handling: **204** the key is simply not set (it was a 404 bef
 **404** unknown or **disabled** plugin, or unknown scope — a *wrong address* now, never "not set" ·
 **400** a `user` id other than `me`, or an illegal key · **401** `user/me` while anonymous · **403** below the
 manifest's read/write floor · **403 `problems/backend-owned-key`** on a key the manifest reserves for the
-backend · **429** on the log endpoint only.
+backend · **403 `problems/key-floor`** (0.19.0) on a key the manifest raises above its own floor via
+`data.keyFloors` — distinct from the plain role-floor 403 and from `backend-owned-key` · **429** on the log
+endpoint only.
+
+**`data.keyFloors` changes two of the four endpoints silently rather than with a 403 (0.19.0).** A key below
+its floor is simply **left out** of the `GET …?prefix=` listing (counted out of `totalElements` too, not
+just hidden from `items`), and **left absent** from the `GET …?ids=&keys=` batch answer — indistinguishable
+from a key nobody ever set. Only a *single* `GET`/`PUT`/`DELETE` of a hidden key gets the `key-floor` 403
+above. Not for the `user` scope, same as `backendOwned`.
 
 There are **no ETags, no `If-Match`, no 409 and no size cap** on the doc store — writes are last-write-wins.
 Two tiles editing one key will clobber each other; if that matters, partition the keys. The doc API is not
@@ -202,21 +215,30 @@ rate-limited; `POST /api/plugins/<id>/log` is (per plugin, fixed one-minute wind
 
 Every `PluginApiClient` method rejects with a `PluginApiError` on a non-2xx response — `status` plus the
 RFC 7807 body (`problem?: { type?, title?, detail?, instance? }`), so you can finally tell *the read floor
-refused you* apart from *this key is `backendOwned`*, both 403s the contract deliberately words differently:
+refused you* apart from *this key is `backendOwned`* apart from *this key has its own `keyFloors` floor* —
+three 403s the contract deliberately words differently:
 
 ```ts
-import { isPluginApiError } from '@mosaicast/plugin-sdk';
+import { isPluginApiError, PROBLEM_TYPES } from '@mosaicast/plugin-sdk';
 
 try {
   await ctx.api.put(`data/site/main/stats`, computed);
 } catch (e) {
   if (isPluginApiError(e) && e.status === 403) {
-    ctx.log('warn', e.problem?.detail ?? 'refused');
-    return;
+    switch (e.problem?.type) {
+      case PROBLEM_TYPES.keyFloor:        return showNotice('Only an admin can change this.');
+      case PROBLEM_TYPES.backendOwnedKey: return showNotice('This value is computed by the plugin.');
+      default:                            return showNotice('Not allowed.');   // the plugin-level floor
+    }
   }
   throw e;                                            // a real failure — do not swallow it
 }
 ```
+
+**`PROBLEM_TYPES`** (0.19.0) gives the stable RFC 7807 `type` URIs for all four doc-store refusals —
+`forbidden` (the plugin's own floor), `backendOwnedKey`, `keyFloor` (`data.keyFloors`), and `unauthorized`
+(the 401 on an anonymous `user`-scope request) — so you compare against a frozen constant rather than
+matching an English `detail` string that can change wording under you.
 
 Use `isPluginApiError`, never `instanceof` — the error crosses a bundle boundary from the host, so it is not
 guaranteed to share a constructor with anything in your bundle.
@@ -288,7 +310,7 @@ for (const slug of ctx.episodes) {
 
 ```ts
 display(slug: string): Promise<DisplaySnapshot | null>          // null: no snapshot, or not visible — indistinguishable
-displayMany(slugs: string[]): Promise<Record<string, DisplaySnapshot>>   // clamped at DISPLAY_BATCH_LIMIT (200), not rejected
+displayMany(slugs: string[]): Promise<Record<string, DisplaySnapshot>>   // splits + merges past DISPLAY_BATCH_LIMIT (200) since 0.19.0; a failed chunk rejects the whole call
 ```
 
 **Not authoritative and worth reading live rather than copying.** The host overwrites the snapshot on every
@@ -323,6 +345,12 @@ seasonScope('the-sample-cast', 1);   // => { type: 'season', id: 'the-sample-cas
 Before 0.17.0 this data only existed inside `episodeLabels`, a display string (`"S01E06 · Title"`) that also
 drops the season entirely for an unnumbered episode — parse it and you inherit both gaps. Prefer the typed
 fields.
+
+**`season`/`episodeNo` are "as the site places the episode," and either may be `0` (core 0.7.7, documented
+as of 0.19.0).** A podcaster can set either by hand in the admin, and the hand-set value wins over the
+feed's `itunes:*` one and survives every later poll — it's how a prologue gets to be "episode 0" at all,
+since `itunes:episode` can't carry a zero. **Never write `if (snap.episodeNo)`** — zero is a real, meaningful
+number here, not JS-falsy "unset." Check `!= null` explicitly.
 
 **`phase` and `announceAt` place the episode in its release (0.18.0, needs core 0.7.7+)** — identity like
 `feed`/`season`/`episodeNo`: derived by the host on read, never overwritten by a refetch. `phase` is an
@@ -573,10 +601,13 @@ What the host enforces:
 - **Names come from your manifest.** Entity and field names are resolved server-side against your own
   declaration and values are bound, never interpolated — another plugin's tables are unnameable, not merely
   blocked.
-- Access is the same **`data.readableBy`** floor as the doc store. One rule for both surfaces.
+- **Access is `storage.schemaReadableBy` since 0.19.0, not automatically `data.readableBy`** — the two were
+  the same rule before this release; now `schemaReadableBy` is its own, independent setting that merely
+  *defaults* to `data.readableBy` when the manifest leaves it out. Check `manifest.md` for which one your
+  plugin actually declared before assuming they match.
 - **404** an entity you never declared (or a doc-store plugin hitting `schema/…` at all) · **400** an
   undeclared field, a value that will not coerce to the declared type, or `search` on a field that is not
-  `:fulltext` · **403** below `readableBy`.
+  `:fulltext` · **403** below `schemaReadableBy`.
 - Empty `search` text matches **nothing**, not everything. `like` is case-sensitive with `%` as the wildcard;
   for text inside a field use `search`, which reads the GIN index a leading-wildcard `like` cannot.
 - Results are ranked best-match first unless your `orderBy` replaces that ordering.
