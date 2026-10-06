@@ -57,9 +57,10 @@ interface MosaicastHandle {
 
 ```
 scope: { type: 'site'|'feed'|'season'|'episode'; id: string }   // slot scope; never `user`; site id is 'main'
-episodes: string[]                                              // resolved, access-filtered public slugs — full scope, not capped (core 0.7.6)
+episodes: string[]                                              // resolved, access-filtered public slugs — full scope, not capped (core 0.7.6); `planned` ones excluded below podcaster
 episodeLabels?: Record<string, string>                          // slug → label; may be absent or partial
-episode?: { status: 'PLANNED'|'PUBLISHED'|'WITHDRAWN' }         // see "what the host actually supplies"
+episode?: { status: EpisodeStatus; phase: EpisodePhase;         // on the episode scope — see "what the host actually supplies"
+            announceAt?: string }                                // required `phase`; ISO instant while planned (0.18.0)
 user: { id: string; role: 'admin'|'podcaster'|'fan';                // null = anonymous
          displayName: string; avatarUrl: string } | null            // presentation, added 0.13.0
 api: PluginApiClient                                            // /api/plugins/<id>/*, auth attached; typed errors
@@ -93,18 +94,23 @@ Also exported: `PLATFORM_API_VERSION`, `SELF_SCOPE_ID` (`'me'`), `DataScopeType`
 `FeedsClient`/`DISPLAY_BATCH_LIMIT`, `TagsClient`/`TagInfo`, `UserDirectory`/`UserRef`,
 `NotifyClient`/`NotifyMessage`/`notifyText`, `TranslationClient`/`TranslationRequest`/
 `TranslationResult`, `LocaleInfo`, `PluginApiError`/`isPluginApiError`/`ProblemDetail`,
-`resolveArtwork(snapshot)`, `matchRoute(path, patterns)`, `iconCss`/`iconMask`, `createPluginI18n`, and the
-documentation-only manifest types (`PluginManifest`, `PluginTagsDeclaration`, `PluginExternalDeclaration`,
-`ExternalServiceKind`, `PluginNavDeclaration`, `PluginIdentityDeclaration`, `PluginNotificationsDeclaration`,
-…). Note there is **no** TS type for the manifest's `blobs` block — core validates it, and nothing in the
-SDK reads `plugin.json`.
+`EpisodeStatus`/`EpisodePhase` (0.18.0), `resolveArtwork(snapshot)`, `seasonScope(feed, n)`/
+`resolveSeasonScope(snapshot)` (0.17.0), `matchRoute(path, patterns)`, `iconCss`/`iconMask`,
+`createPluginI18n`, and the documentation-only manifest types (`PluginManifest`,
+`PluginTagsDeclaration`, `PluginExternalDeclaration`, `ExternalServiceKind`, `PluginNavDeclaration`,
+`PluginIdentityDeclaration`, `PluginNotificationsDeclaration`, `PluginBlobsDeclaration`, …).
+**`PluginBlobsDeclaration` has existed since 0.9.0** (`maxFileBytes`/`quotaBytes`/`mimeTypes`, plus the
+optional `readableBy`/`writableBy` pair since 0.18.0) — a prior revision of this skill claimed there was no
+TS type for the `blobs` block at all; that was simply wrong, not just stale. Core still validates and is
+still authoritative on rejection; the type exists only for editor autocomplete.
 
 ## What the host actually supplies today
 
-Verified against core's `frontend/src/plugins/buildCtx.ts` and `PluginMount.tsx` at 0.7.6 — assume this
+Verified against core's `frontend/src/plugins/buildCtx.ts` and `PluginMount.tsx` at 0.7.7 — assume this
 until core says otherwise. **`docs`, `feeds`, `tags`, `users`, `notify`, `schema`, `blobs`, `translation`,
-`locale.available/content`, `consent.has/granted/request` and, since 0.7.6, `filter` are real, wired
-implementations** — the "contract ahead of implementation" gap 0.9.0 shipped with has closed for all of them.
+`locale.available/content`, `consent.has/granted/request`, `filter` (since 0.7.6) and, since 0.7.7, `episode`
+are real, wired implementations** — the "contract ahead of implementation" gap 0.9.0 shipped with has closed
+for all of them.
 
 **The 4×/s `ctx` churn `MosaicastHandle` (0.15.0) exists to survive is itself already fixed on the host
 side, as of 0.7.2.** `PluginMount.tsx` wraps `buildCtx(...)` in `useMemo`, and the player-time reader in its
@@ -115,8 +121,16 @@ hedges this as "independent of this release, can land before it"; it has landed.
 still reassign `ctx` more than "never" — but a component you're debugging today for state loss on this host
 is not hitting the four-times-a-second case the SDK's example was written against.
 
-- **`ctx.episode` is not populated.** Never branch on `episode?.status`; if you need publication state, it is
-  not available client-side. Still true at 0.7.6 — this is the one field the shell has never wired.
+- **`ctx.episode` is populated since core 0.7.7 — this was the one field the shell had never wired, and now
+  is.** Earlier revisions of this skill said flatly not to branch on `episode?.status`; that advice is now
+  wrong and worth actively un-learning. On the `episode` scope, `ctx.episode = { status, phase, announceAt?
+  }` is real: `status` is the stored `EpisodeStatus`, `phase` is the derived `EpisodePhase` — **branch on
+  `phase`, never on `status`**, since an `UPCOMING` episode is still internally `PLANNED` but is fully
+  public — and `announceAt` is present only while `PLANNED`/`UPCOMING` with a scheduled announcement. A
+  component mounted on a `planned` episode's page only ever happens for a podcaster or an admin; nobody else
+  can open that page to mount it on. There is still no release *event* on the frontend — a phase change
+  arrives as a freshly-assigned `ctx` (same mechanism as a filter or route change), so render from the
+  current value and let `defineMosaicastElement` re-render you.
 - **`filter.current()` is live since core 0.7.6** (core#248) — exactly the kind of thing the previous bullet
   warned would quietly start working. `current()` reflects the shell's `?season=`/`?tag=`/`?order=` URL
   filters as `{ season, tags, sort }`, and `onChange` fires on a real change — including for a listener
@@ -138,6 +152,11 @@ is not hitting the four-times-a-second case the SDK's example was written agains
   speaking-share chart) was quietly wrong past that point, with no error and no truncation flag. The shell
   now pages the host's scope resolution to the end. `FeedsClient.displayMany` keeps its own, separate
   `DISPLAY_BATCH_LIMIT` (200) clamp per *call* — chunk `ctx.episodes` yourself if it is longer than that.
+- **A `planned` episode never reaches a visitor below podcaster, on the frontend, full stop (0.18.0).** It is
+  absent from `ctx.episodes`, and `ctx.feeds.display`/`displayMany` answer `null`/drop it, same as any other
+  access-filtered episode — `display()` still cannot tell "no snapshot" from "not visible," so do not try.
+  Your **backend**'s `FeedAccess` sees it regardless (see `backend.md`) — if a frontend ever shows something
+  derived from backend-aggregated data, that aggregation is where the visibility check belongs, not here.
 - `locale.current()` is fixed for the mount; `locale.available()`/`locale.content()` come from
   `GET /api/i18n/locales` and the admin's content-languages setting respectively — real lists, not stubs, and
   they may legitimately disagree with your own `locales/*.json` catalogs (§12.7).
@@ -304,6 +323,18 @@ seasonScope('the-sample-cast', 1);   // => { type: 'season', id: 'the-sample-cas
 Before 0.17.0 this data only existed inside `episodeLabels`, a display string (`"S01E06 · Title"`) that also
 drops the season entirely for an unnumbered episode — parse it and you inherit both gaps. Prefer the typed
 fields.
+
+**`phase` and `announceAt` place the episode in its release (0.18.0, needs core 0.7.7+)** — identity like
+`feed`/`season`/`episodeNo`: derived by the host on read, never overwritten by a refetch. `phase` is an
+`EpisodePhase`; `announceAt` (ISO-8601) is present only while `PLANNED`/`UPCOMING` with a scheduled
+announcement. **A visitor below podcaster never receives a `planned` snapshot at all** — `display()` answers
+`null` for it rather than handing over a snapshot with `phase: 'planned'` — so on the frontend, seeing
+`'planned'` at all already means the viewer is a podcaster or an admin.
+
+```ts
+const snap = await ctx.feeds.display(slug);
+if (snap?.phase === 'upcoming') showCountdown(snap.announceAt);
+```
 
 ### `ctx.sanitize` — HTML you did not write (0.16.0)
 

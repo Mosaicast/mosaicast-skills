@@ -4,15 +4,15 @@ Required by every repo's `docs/BRIEF.md` DoD (ARCHITECTURE §13.5). No core, no 
 
 ## Backend — `dev.mosaicast.plugin.testkit.*`
 
-`testImplementation("dev.mosaicast:plugin-testkit:0.16.0")`
+`testImplementation("dev.mosaicast:plugin-testkit:0.18.0")`
 
 | Fake | Notes |
 |---|---|
-| `FakePluginContext` | `store()` narrows to `InMemoryDocStore` and `logger()` to `RecordingLogger`, so no casts. `onSchedule` runs the task **synchronously and immediately** (both overloads — the `Supplier` form's value is read once, validated positive, then the task runs); `scheduledCount()` counts registrations, `scheduledPeriods()` (0.15.0) **re-reads every supplier now** — the assertion that catches a period captured once instead of read live — and `runScheduled()` (0.15.0) ticks every registered task again, for the second-pass case. `withTags(Tags)` / `withLocales(Locales)` / `withTranslation(Translation)` / `withUsers(Users)` (0.13.0) / `withNotifier(Notifier)` (0.14.0) / `withReadsAllUsers()` (0.16.0) are **chaining mutators**, not constructor parameters — the constructor list stopped growing at five arguments (`store, config, feeds, schema[, blobs]`) on purpose (0.9.0). |
+| `FakePluginContext` | `store()` narrows to `InMemoryDocStore` and `logger()` to `RecordingLogger`, so no casts. `onSchedule` runs the task **synchronously and immediately** (both overloads — the `Supplier` form's value is read once, validated positive, then the task runs); `scheduledCount()` counts registrations, `scheduledPeriods()` (0.15.0) **re-reads every supplier now** — the assertion that catches a period captured once instead of read live — and `runScheduled()` (0.15.0) ticks every registered task again, for the second-pass case. `onEpisodeReleased(...)` just keeps the listener; `fireEpisodeReleased(slug)` (0.18.0) calls every registered listener in order, catching and logging a throw exactly as the host does — pair it with `FakeFeedAccess.withPhase(slug, RELEASED)` so a lookup inside the listener sees the released state. `episodeReleasedListenerCount()` (0.18.0) asserts a plugin subscribed at all. `withTags(Tags)` / `withLocales(Locales)` / `withTranslation(Translation)` / `withUsers(Users)` (0.13.0) / `withNotifier(Notifier)` (0.14.0) / `withReadsAllUsers()` (0.16.0) are **chaining mutators**, not constructor parameters — the constructor list stopped growing at five arguments (`store, config, feeds, schema[, blobs]`) on purpose (0.9.0). |
 | `InMemoryDocStore` | `asUser(uuid)`, `docsOf(uuid)`, `withBackendOwned(...)`, `acrossUsers()` (0.16.0 — every user partition, for assertions; always available on the store, whatever the plugin declares). Optional `ObjectMapper` ctor — Jackson 3, so `JsonMapper.builder().build()`. |
 | `FakeSchemaStore` | `new FakeSchemaStore(ns).withEntity("page", "slug", "title").withFulltext("page", "markdown")` — enforces the same declaration the host does. |
 | `InMemoryPluginBlobs` | `withLimits(maxFile, quota)`, `withMimeTypes(Set.of(…))`, `rejectContent("bad.png")`, plus `usedBytes()` / `size()` / `bytesOf(ref)`. Refuses what the host refuses. |
-| `FakeFeedAccess` | `withDisplay(refId, snapshot)`; `display(unknownId)` throws; `episodesIn(Scope.user())` is empty. |
+| `FakeFeedAccess` | `withDisplay(refId, snapshot)`; `display(unknownId)` throws; `episodesIn(Scope.user())` is empty. Nothing here is filtered by phase — a `PLANNED` episode in the map hands over like any other, matching how the host's real `FeedAccess` behaves for a backend. `withPhase(refId, EpisodePhase)` (0.18.0) moves an already-registered snapshot to another phase, keeping the rest; leaving `PLANNED`/`UPCOMING` clears `announceAt`, as the host does. |
 | `FakeTags` (0.9.0) | `withEpisodeWrites()` stands in for `tags.writesEpisodes`, **off by default** so the refused branch gets exercised; `withFeedTag(slug, tag)` seeds a row this plugin may read but must not remove. Canonicalises tags exactly as the host does (`FakeTags.canonical(tag)` is exposed to assert against). |
 | `FakeUsers` (0.13.0) | `withUser(id, name, role)` / `withUser(name, role)` (generates and returns a UUID) seeds a resolvable user — `avatarUrl` is derived, never accepted, so a test can't assert a shape production never produces. `withoutUser(id)` stages the erased-author case. `resolvedIds()` records every id asked for, across calls, for pinning "one batched lookup, not N." |
 | `FakeNotifier` (0.14.0) | Wraps an `InMemoryDocStore` (pass the same one `FakePluginContext` uses) and reads eligibility from **its user partitions** rather than a seeded list — give a user a row and they become notifiable, exactly how the host decides. `withPerUserPerDay(n)` arms the cap, **off by default**. `delivered()` / `messagesFor(userId)` are the assertion surface; `notifiable()` exposes the eligible set directly, for asserting the rule itself rather than inferring it from a send. |
@@ -180,13 +180,32 @@ wholesale rather than merging it. A signed-in `user` override written against an
 (`{ id, role }` only) now fails `tsc --noEmit`, silently, with no test-runner failure — the same trap every
 `ctx` member gain has sprung since 0.7.0.
 
+**`episode` sprang the same trap at 0.18.0: `phase` is now required.** A hand-built `episode: { status:
+'PLANNED' }` no longer type-checks. Use `makeMockEpisode(phase, announceAt?)` instead of building the object
+yourself — it derives `status` from the phase the way the host stores it, so the test names the one thing
+it's actually about:
+
+```ts
+import { makeMockEpisode } from '@mosaicast/plugin-sdk/testing';
+
+const ctx = makeMockCtx({
+  scope: { type: 'episode', id: 'kraken' },
+  episode: makeMockEpisode('upcoming', '2026-10-09T18:00:00Z'),   // announceAt kept only for planned/upcoming
+});
+```
+
+To test a phase *change*, re-render with a new `ctx` (a fresh `makeMockEpisode(...)` result) — the shell
+reassigns `ctx` on a phase change, same as a filter or route change; there is no event to wait on.
+
 `MockPluginContext` = `PluginContext` + `api.calls` / `api.responses` + `logs` + `navigations`. Defaults:
 site scope with id `main`, no episodes, anonymous user (`null`), **real** `docs`/`feeds` doubles (every
 plugin has a doc store and can read snapshots — there is no "declared it or not" case for these two),
 **`tags: null`**, **`users: null`**, **`notify: null`**, **`schema: null`**, **`blobs: null`**,
 **`translation: null`**, `locale.available()`/`.content()` → English-only, empty filter, player at 0s, empty
 route, `en`, `progress → null`, `DEFAULT_THEME`, and a consent double that **denies everything except
-`necessary`**. `episodeLabels` is absent; `tags`, `users`, `notify`, `schema`, `blobs` and `translation` are
+`necessary`**. `episodeLabels` and `episode` are both absent by default — a component that reads
+`ctx.episode?.phase` without checking the scope first has to survive mounting on something other than the
+episode scope, same as production; `tags`, `users`, `notify`, `schema`, `blobs` and `translation` are
 all `null` on the same argument: a component written against a value that is always there never handles the
 case where it is not, and most plugins declare none of the five manifest
 blocks that turn them non-`null`.
@@ -272,6 +291,13 @@ host does.
 fields on `DisplaySnapshot`, so `withDisplay('kraken', { title: '…', description: '', feed: 'the-deep',
 season: 2, episodeNo: 3 })` is enough to test `resolveSeasonScope`/`seasonScope` against a fixture; omitting
 them is still valid and exercises the "older host" / "no season" absent case.
+
+`MockFeedsClient.withPhase(slug, phase)` (0.18.0) moves a registered snapshot to another release phase, the
+TS mirror of the Java kit's `FakeFeedAccess.withPhase(...)`; leaving `'planned'`/`'upcoming'` drops
+`announceAt`, as the host does. Unlike the Java fake, **the frontend mock has no separate "backend sees
+everything" mode** — there is only one `ctx.feeds` on the frontend, and it should behave like what a visitor
+actually gets, so give it the phase the *mounted viewer* would see (a `planned` snapshot for a podcaster's
+own preview, `null`/absent for anyone else testing the "not visible" path).
 
 ```ts
 const tags = makeMockTags({ writesEpisodes: false }).withFeedTag('kraken', 'maritime');
