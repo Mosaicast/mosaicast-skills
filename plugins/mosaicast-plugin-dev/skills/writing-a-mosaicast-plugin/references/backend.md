@@ -121,6 +121,10 @@ instant, and calls this only when they differ — an announce, an `announceAt` e
 release, a withdrawal, a withdrawn episode coming back, and a cancellation. On cancellation the listener
 receives `phase == null`: the episode no longer exists, its episode-scoped documents are already gone with
 it, but anything your *other* scopes say about it (that site-wide index again) is yours to drop.
+**Deleting a feed fires it too, once per episode, with `phase == null` (core 0.8.1)** — the same "no longer
+exists" signal a cancelled plan already gets, so one `null`-handling branch covers both. A feed with many
+episodes publishes its events one-by-one, each plugin's listeners on their own thread, so the deletion
+request itself does not wait on them.
 
 **When it does not fire:** the clock passing `announceAt` on its own involves no write, so nothing calls
 this for a `PLANNED → UPCOMING` transition — that direction only makes an episode *more* visible, and being

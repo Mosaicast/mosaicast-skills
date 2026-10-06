@@ -222,7 +222,8 @@ To re-check the pin yourself:
     harmless, so that direction is still yours to reconcile on a schedule. Anything computed **per request**
     (a sitemap, OG tags, `PageRouteProvider`, search) was already correct and needs none of this; this hook
     is only for what you cached. Delivery is the same as `onEpisodeReleased`: best effort, not durable, and
-    on a release the release listeners run first.
+    on a release the release listeners run first. **Deleting a whole feed fires it too, once per episode,
+    `phase == null`** (core 0.8.1) — the same "gone" signal cancellation already sends.
 38. **`DisplaySnapshot.season`/`.episodeNo` are no longer purely feed-derived, and both may be `0`** (core
     0.7.7, documented as of SDK 0.19.0). A podcaster can set either by hand in the admin — the hand-set value
     wins, survives feed polls, and is how a prologue episode gets to be "episode 0" at all, since
