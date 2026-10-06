@@ -4,15 +4,15 @@ Required by every repo's `docs/BRIEF.md` DoD (ARCHITECTURE §13.5). No core, no 
 
 ## Backend — `dev.mosaicast.plugin.testkit.*`
 
-`testImplementation("dev.mosaicast:plugin-testkit:0.16.0")`
+`testImplementation("dev.mosaicast:plugin-testkit:0.19.0")`
 
 | Fake | Notes |
 |---|---|
-| `FakePluginContext` | `store()` narrows to `InMemoryDocStore` and `logger()` to `RecordingLogger`, so no casts. `onSchedule` runs the task **synchronously and immediately** (both overloads — the `Supplier` form's value is read once, validated positive, then the task runs); `scheduledCount()` counts registrations, `scheduledPeriods()` (0.15.0) **re-reads every supplier now** — the assertion that catches a period captured once instead of read live — and `runScheduled()` (0.15.0) ticks every registered task again, for the second-pass case. `withTags(Tags)` / `withLocales(Locales)` / `withTranslation(Translation)` / `withUsers(Users)` (0.13.0) / `withNotifier(Notifier)` (0.14.0) / `withReadsAllUsers()` (0.16.0) are **chaining mutators**, not constructor parameters — the constructor list stopped growing at five arguments (`store, config, feeds, schema[, blobs]`) on purpose (0.9.0). |
-| `InMemoryDocStore` | `asUser(uuid)`, `docsOf(uuid)`, `withBackendOwned(...)`, `acrossUsers()` (0.16.0 — every user partition, for assertions; always available on the store, whatever the plugin declares). Optional `ObjectMapper` ctor — Jackson 3, so `JsonMapper.builder().build()`. |
+| `FakePluginContext` | `store()` narrows to `InMemoryDocStore` and `logger()` to `RecordingLogger`, so no casts. `onSchedule` runs the task **synchronously and immediately** (both overloads — the `Supplier` form's value is read once, validated positive, then the task runs); `scheduledCount()` counts registrations, `scheduledPeriods()` (0.15.0) **re-reads every supplier now** — the assertion that catches a period captured once instead of read live — and `runScheduled()` (0.15.0) ticks every registered task again, for the second-pass case. `onEpisodeReleased(...)` just keeps the listener; `fireEpisodeReleased(slug)` (0.18.0) calls every registered listener in order, catching and logging a throw exactly as the host does — pair it with `FakeFeedAccess.withPhase(slug, RELEASED)` so a lookup inside the listener sees the released state. `episodeReleasedListenerCount()` (0.18.0) asserts a plugin subscribed at all. `onEpisodePhaseChanged(...)` / `fireEpisodePhaseChanged(slug, phase)` (0.19.0, `phase == null` for cancellation) and `episodePhaseListenerCount()` (0.19.0) are the same trio for the write-driven phase hook. `withTags(Tags)` / `withLocales(Locales)` / `withTranslation(Translation)` / `withUsers(Users)` (0.13.0) / `withNotifier(Notifier)` (0.14.0) / `withReadsAllUsers()` (0.16.0) are **chaining mutators**, not constructor parameters — the constructor list stopped growing at five arguments (`store, config, feeds, schema[, blobs]`) on purpose (0.9.0). |
+| `InMemoryDocStore` | `asUser(uuid)`, `docsOf(uuid)`, `withBackendOwned(...)`, `acrossUsers()` (0.16.0 — every user partition, for assertions; always available on the store, whatever the plugin declares). `withKeyFloor(pattern, readableBy, writableBy)` (0.19.0) declares a key floor the same way the manifest does; `asUser(UUID, Role)` and `asAnonymous()` (0.19.0) give you a client view at a specific role to assert a floor actually bites (`asUser(uuid)` alone stays a plain `FAN` view). Optional `ObjectMapper` ctor — Jackson 3, so `JsonMapper.builder().build()`. |
 | `FakeSchemaStore` | `new FakeSchemaStore(ns).withEntity("page", "slug", "title").withFulltext("page", "markdown")` — enforces the same declaration the host does. |
 | `InMemoryPluginBlobs` | `withLimits(maxFile, quota)`, `withMimeTypes(Set.of(…))`, `rejectContent("bad.png")`, plus `usedBytes()` / `size()` / `bytesOf(ref)`. Refuses what the host refuses. |
-| `FakeFeedAccess` | `withDisplay(refId, snapshot)`; `display(unknownId)` throws; `episodesIn(Scope.user())` is empty. |
+| `FakeFeedAccess` | `withDisplay(refId, snapshot)`; `display(unknownId)` throws; `episodesIn(Scope.user())` is empty. Nothing here is filtered by phase — a `PLANNED` episode in the map hands over like any other, matching how the host's real `FeedAccess` behaves for a backend. `withPhase(refId, EpisodePhase)` (0.18.0) moves an already-registered snapshot to another phase, keeping the rest; leaving `PLANNED`/`UPCOMING` clears `announceAt`, as the host does. |
 | `FakeTags` (0.9.0) | `withEpisodeWrites()` stands in for `tags.writesEpisodes`, **off by default** so the refused branch gets exercised; `withFeedTag(slug, tag)` seeds a row this plugin may read but must not remove. Canonicalises tags exactly as the host does (`FakeTags.canonical(tag)` is exposed to assert against). |
 | `FakeUsers` (0.13.0) | `withUser(id, name, role)` / `withUser(name, role)` (generates and returns a UUID) seeds a resolvable user — `avatarUrl` is derived, never accepted, so a test can't assert a shape production never produces. `withoutUser(id)` stages the erased-author case. `resolvedIds()` records every id asked for, across calls, for pinning "one batched lookup, not N." |
 | `FakeNotifier` (0.14.0) | Wraps an `InMemoryDocStore` (pass the same one `FakePluginContext` uses) and reads eligibility from **its user partitions** rather than a seeded list — give a user a row and they become notifiable, exactly how the host decides. `withPerUserPerDay(n)` arms the cap, **off by default**. `delivered()` / `messagesFor(userId)` are the assertion surface; `notifiable()` exposes the eligible set directly, for asserting the rule itself rather than inferring it from a send. |
@@ -21,7 +21,7 @@ Required by every repo's `docs/BRIEF.md` DoD (ARCHITECTURE §13.5). No core, no 
 | `MapPluginConfig` | `new MapPluginConfig().with("refreshIntervalMinutes", 5)` |
 | `RecordingLogger` | `events()` / `events(Level)` / `clear()`; formatted messages, throwable captured separately. |
 | `SearchProviderHarness` (0.9.0) | `new SearchProviderHarness(provider).search(query)` calls the provider **once per `Role`, anonymous included**, and returns a `SearchResults` with `.forRole(role)`, `.titles(role)` and `.leakedToAnonymous(subpath)` — the one assertion this extension point's unusual access rule exists for. |
-| `UserDataHandlerHarness` (0.9.0) | `.eraseTwice(userId)` calls `eraseUser` twice as a retry would and fails with a clear message if the second call throws where the first succeeded; `.export(userId)` calls `exportUser` (call before `eraseTwice`, not after). |
+| `UserDataHandlerHarness` (0.9.0) | `.eraseTwice(userId)` calls `eraseUser` twice as a retry would and fails with a clear message if the second call throws where the first succeeded; `.export(userId)` calls `exportUser` (call before `eraseTwice`, not after). `.exportFiles(userId)` (0.19.0) asks **the way the host does** — `exportFiles` first, falling back to `exportUser` when it's empty — and enforces `UserExport.MAX_BYTES`/`TIMEOUT` itself, so a plugin that would be recorded `failed` in production fails the test the same way, not quietly passing against an unbounded fake. |
 | `PageRouteProviderHarness` (0.9.1) | `.check(subpaths...)` always probes the **root** (`""`) whether you list it or not, records a throw as the `200` the host would still serve, and returns a `RouteAnswers` with `.serves(subpath)`, `.servesRoot()`, `.notFound()`, `.served()`, `.threw(subpath)`. |
 | `SitemapProviderHarness` (0.12.0) | `new SitemapProviderHarness(pluginId, provider).collect()` calls `urls()` once and checks it **as the host would** — an out-of-namespace `loc`/alternate, a hand-written `?lang=`, a duplicate `loc`, and the one no single entry can see: two entries in one translation group declaring different groups. Returns `SitemapEntries` with `.problems()` (empty is the assertion worth writing), `.locations()`, `.locales(loc)`, `.alternates(loc)`. A throwing provider is **not** caught — that is the original stack trace, more useful than "no sitemap entries". |
 
@@ -85,6 +85,22 @@ store.asUser(mallory).put(Scope.user(), "mark:ep-1", ok);            // USER is 
 the declaration — a backend aggregating over users NPEs (or, better, throws your own "manifest no longer
 declares it") in every test that forgot. Migrating: append `.withReadsAllUsers()` to each context. The
 `FakeNotifier`'s eligibility does not depend on it, as the host's does not.
+
+### Testing `keyFloors` (0.19.0)
+
+```java
+var store = new InMemoryDocStore().withKeyFloor("import:*", "podcaster", null);
+store.put(Scope.site(), "import:raw", staged);                           // backend: fine, as always
+
+assertTrue(store.asAnonymous().query(Scope.site(), "import:").isEmpty()); // hidden from a listing
+assertThrows(IllegalStateException.class,
+        () -> store.asUser(mallory, Role.FAN).get(Scope.site(), "import:raw", Object.class));
+store.asUser(ana, Role.PODCASTER).get(Scope.site(), "import:raw", Object.class);   // meets the floor: fine
+```
+
+`asUser(UUID, Role)` and `asAnonymous()` exist specifically for this — a plain `asUser(uuid)` is always
+`FAN`, which is enough to prove a floor keeps out a visitor below it but not to prove a *podcaster* gets
+through. Test both sides: the role the floor is meant to stop, and the role it's meant to admit.
 
 ### Testing `tags`, and the two extension points a request can reach
 
@@ -180,16 +196,42 @@ wholesale rather than merging it. A signed-in `user` override written against an
 (`{ id, role }` only) now fails `tsc --noEmit`, silently, with no test-runner failure — the same trap every
 `ctx` member gain has sprung since 0.7.0.
 
+**`episode` sprang the same trap at 0.18.0: `phase` is now required.** A hand-built `episode: { status:
+'PLANNED' }` no longer type-checks. Use `makeMockEpisode(phase, announceAt?)` instead of building the object
+yourself — it derives `status` from the phase the way the host stores it, so the test names the one thing
+it's actually about:
+
+```ts
+import { makeMockEpisode } from '@mosaicast/plugin-sdk/testing';
+
+const ctx = makeMockCtx({
+  scope: { type: 'episode', id: 'kraken' },
+  episode: makeMockEpisode('upcoming', '2026-10-09T18:00:00Z'),   // announceAt kept only for planned/upcoming
+});
+```
+
+To test a phase *change*, re-render with a new `ctx` (a fresh `makeMockEpisode(...)` result) — the shell
+reassigns `ctx` on a phase change, same as a filter or route change; there is no event to wait on.
+
 `MockPluginContext` = `PluginContext` + `api.calls` / `api.responses` + `logs` + `navigations`. Defaults:
 site scope with id `main`, no episodes, anonymous user (`null`), **real** `docs`/`feeds` doubles (every
 plugin has a doc store and can read snapshots — there is no "declared it or not" case for these two),
 **`tags: null`**, **`users: null`**, **`notify: null`**, **`schema: null`**, **`blobs: null`**,
 **`translation: null`**, `locale.available()`/`.content()` → English-only, empty filter, player at 0s, empty
 route, `en`, `progress → null`, `DEFAULT_THEME`, and a consent double that **denies everything except
-`necessary`**. `episodeLabels` is absent; `tags`, `users`, `notify`, `schema`, `blobs` and `translation` are
+`necessary`**. `episodeLabels` and `episode` are both absent by default — a component that reads
+`ctx.episode?.phase` without checking the scope first has to survive mounting on something other than the
+episode scope, same as production; `tags`, `users`, `notify`, `schema`, `blobs` and `translation` are
 all `null` on the same argument: a component written against a value that is always there never handles the
 case where it is not, and most plugins declare none of the five manifest
 blocks that turn them non-`null`.
+
+**`filter` is a snapshot, not a live double, unlike `route`.** `makeMockCtx({ filter: { current: () => ({
+season: 1 }), onChange: () => noop } })` fixes what `current()` returns for the whole render; `onChange`
+stays a no-op that never fires (same as `player.on`, `route.onChange` and `locale.onChange`), even though
+core 0.7.6 makes the real `ctx.filter` reassign `ctx` and fire listeners on a visitor's filter change. To
+test a component's reaction to a filter *change*, re-render with a new `ctx` (new `filter.current()` return
+value) the same way a `MosaicastHandle`'s `update(next)` test does — not by waiting on `onChange`.
 
 ### `apiError(status, problem?)` and `flushMockApi(client)` (0.9.0)
 
@@ -244,6 +286,13 @@ throws here instead of first surfacing as a production 400. `stored` is keyed `"
 `getMany` and a **`calls`** log (`{ method, partitions, keys }` per call), so a test can assert "one batch,
 not twenty `get`s". A hand-written `DocClient` wrapper needs `getMany` too, or it stops type-checking.
 
+**`makeMockDocs(initial, { data, viewer })` (0.19.0) enforces floors instead of ignoring them.** Pass your
+manifest's `data` block (floors, `backendOwned`, `keyFloors`) and a `viewer` role, and the double rejects
+exactly as the host does — `PROBLEM_TYPES.forbidden`/`backendOwnedKey`/`keyFloor` on a single
+`get`/`put`/`remove`, a hidden key dropped from `list`, absent from `getMany`. Without this option the mock
+behaves as before: no floors, nothing refused — fine for a test about rendering, wrong for a test about
+authorization. Write the authorization test with the option; don't assume the plain form covers it.
+
 **`makeMockCtx().sanitize` is `sanitizeLikeHost`** (0.16.0) — the host's `FEED_HTML_POLICY` walked over a
 parsed tree, so a test sees the same removals (`<style>`, `style=`, handlers, `javascript:`). Needs jsdom.
 Worth one test per render path of foreign HTML, and check it *fails* with `sanitize: (h) => h` — otherwise it
@@ -258,8 +307,22 @@ expect(root.textContent).toContain('The Kraken');   // and renders nothing for '
 
 `makeMockFeeds` resolves an unregistered slug to `null` (or drops it from a `displayMany` batch) rather than
 throwing — exactly what the host does for an episode this visitor may not see. `requested` records every
-slug asked for, batched calls included, and `displayMany` clamps at `DISPLAY_BATCH_LIMIT` the same way the
-host does.
+slug asked for, batched calls included. **`displayMany` stopped clamping at 0.19.0** — past
+`DISPLAY_BATCH_LIMIT` it splits into several requests and merges them, same as the real client; `batches`
+(0.19.0) records each request the real client would have sent, so a test can assert "two requests, not one
+silently short one" for a long `ctx.episodes`. A test still asserting the old 200-clamp needs to change.
+
+`DisplaySnapshotFixture` picked up `feed`/`season`/`episodeNo` for free (0.17.0) — they're plain optional
+fields on `DisplaySnapshot`, so `withDisplay('kraken', { title: '…', description: '', feed: 'the-deep',
+season: 2, episodeNo: 3 })` is enough to test `resolveSeasonScope`/`seasonScope` against a fixture; omitting
+them is still valid and exercises the "older host" / "no season" absent case.
+
+`MockFeedsClient.withPhase(slug, phase)` (0.18.0) moves a registered snapshot to another release phase, the
+TS mirror of the Java kit's `FakeFeedAccess.withPhase(...)`; leaving `'planned'`/`'upcoming'` drops
+`announceAt`, as the host does. Unlike the Java fake, **the frontend mock has no separate "backend sees
+everything" mode** — there is only one `ctx.feeds` on the frontend, and it should behave like what a visitor
+actually gets, so give it the phase the *mounted viewer* would see (a `planned` snapshot for a podcaster's
+own preview, `null`/absent for anyone else testing the "not visible" path).
 
 ```ts
 const tags = makeMockTags({ writesEpisodes: false }).withFeedTag('kraken', 'maritime');
