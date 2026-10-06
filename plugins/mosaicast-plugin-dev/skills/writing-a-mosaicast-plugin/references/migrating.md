@@ -1,6 +1,6 @@
-# Migrating an existing plugin up to 0.18.0
+# Migrating an existing plugin up to 0.19.0
 
-The SDK's own `MIGRATION.md` (in the `mosaicast-plugin-sdk` checkout, or `v0.18.0/MIGRATION.md` on GitHub —
+The SDK's own `MIGRATION.md` (in the `mosaicast-plugin-sdk` checkout, or `v0.19.0/MIGRATION.md` on GitHub —
 0.15.0 was once tagged only `0.15.0` without the `v`; both forms resolve now) is the authoritative checklist for the
 **SDK** half of each step — read it, it is short and version-scoped. This file adds two things that doc
 does not: the **core-side** changes each release shipped alongside it, and one file walking the **whole
@@ -28,9 +28,121 @@ first (file storage, `ctx.links`), then start here.
 | 0.15.x → 0.16.0 | Yes (`platformApi`; `data.readsAllUsers` if you aggregate over users) | **Yes — `DocStore.queryAcrossUsers` is gone**; TS: a hand-written `DocClient`/`DisplaySnapshot` literal | `ctx.sanitize`, `descriptionText`, `--mc-accent-text`, config bounds, `consent.categoryLabels`, `ctx.docs.getMany` |
 | 0.16.x → 0.17.0 | Yes (`platformApi`) | No — new, optional fields and a live `ctx.filter`; nothing removed | `DisplaySnapshot.feed`/`.season`/`.episodeNo`, `seasonScope()`, a live `ctx.filter`, uncapped `ctx.episodes`, ZIP uploads, per-`blobs` floors |
 | 0.17.x → 0.18.0 | Yes (`platformApi`) | **Yes — a hand-built `ctx.episode` in TS tests** (`phase` now required) | `ctx.episode.phase`/`.announceAt`, `DisplaySnapshot.phase`/`.announceAt`, `onEpisodeReleased`, planned-episode visibility |
+| 0.18.x → 0.19.0 | Yes (`platformApi`; `keyFloors`/`schemaReadableBy` only if you use them) | No — new, optional manifest fields and surfaces; nothing removed | `data.keyFloors`, `storage.schemaReadableBy`, `onEpisodePhaseChanged`, `UserDataHandler.exportFiles` (GDPR), uncapped `displayMany` |
 
-Do them **in order**; do not skip to 0.18.0 and back-port the manifest fields, because 0.9.0's compile
+Do them **in order**; do not skip to 0.19.0 and back-port the manifest fields, because 0.9.0's compile
 break and 0.10.0's `ctx.translation` addition both have to land first for the later steps to make sense.
+
+---
+
+## 0.18.x → 0.19.0: key floors, a schema read floor, the other phase hook, and file exports
+
+Needs **core 0.8.0** for the GDPR-export half; **core 0.7.8** is enough for everything else (`keyFloors`,
+`schemaReadableBy`, `onEpisodePhaseChanged`, the `displayMany` split). All of it shipped in the SDK at
+0.19.0 regardless — the two-core-release stagger is a core rollout detail, not something you choose per
+feature. `mosaicast-plugin-sample` has **not yet** moved to 0.19.0 at the time of writing; check its tag
+before treating it as a worked example for this step.
+
+This release is **also security-shaped, like 0.16.0's audit**, for one specific reason: a host older than
+0.19.0 does not know `keyFloors` or `schemaReadableBy` exist, so it would load a plugin declaring either and
+quietly serve those keys/rows at the plugin's *wider* floor instead of the narrower one the manifest asks
+for. That is why it is a `platformApi` minor and not a patch.
+
+**Required.**
+
+```diff
+- "platformApi": "0.18.0",
++ "platformApi": "0.19.0",
+- compileOnly("dev.mosaicast:plugin-api:0.18.0")      testImplementation("…plugin-testkit:0.18.0")
++ compileOnly("dev.mosaicast:plugin-api:0.19.0")      testImplementation("…plugin-testkit:0.19.0")
+- "@mosaicast/plugin-sdk": "0.18.0"
++ "@mosaicast/plugin-sdk": "0.19.0"
+```
+
+**That's the whole required migration if you use none of the new manifest fields.** Nothing was removed;
+everything below is opt-in.
+
+**1. Delete any hand-rolled chunking in front of `displayMany`.** It no longer clamps at 200 — past that it
+splits into several requests and merges them, the same guarantee `ctx.docs.getMany` already had:
+
+```diff
+- const slugs = ctx.episodes;
+- const chunks = []; for (let i = 0; i < slugs.length; i += 200) chunks.push(slugs.slice(i, i + 200));
+- const snaps = Object.assign({}, ...(await Promise.all(chunks.map(c => ctx.feeds.displayMany(c)))));
++ const snaps = await ctx.feeds.displayMany(ctx.episodes);
+```
+
+**2. If a schema plugin's tile must be anonymous but its rows should not be, add `storage.schemaReadableBy`.**
+Before, `storage.schemaReadableBy` didn't exist and `data.readableBy` silently doubled as the schema read
+floor — a plugin like bingo, anonymous by design, served every row (player entries keyed by user id,
+quiet-episode rows) to anyone:
+
+```diff
+  "data": { "readableBy": "anonymous", "writableBy": "fan" },
+- "storage": { "schema": { … } }
++ "storage": { "schema": { … }, "schemaReadableBy": "podcaster" }
+```
+
+**3. If you have private bookkeeping beside public numbers in the doc store, give those keys their own
+floor instead of splitting the plugin:**
+
+```diff
+  "data": { "readableBy": "anonymous", "writableBy": "podcaster" },
++ "keyFloors": [{ "keys": ["import:*", "staged:*"], "readableBy": "podcaster" }]
+```
+
+Raise-only, strictest-match-wins, checked after `backendOwned` on writes — see `manifest.md` for the full
+rejection list. `ctx.store()` on your backend is unaffected either way.
+
+**4. If your backend publishes anything about an episode on a schedule, register
+`onEpisodePhaseChanged` alongside `onEpisodeReleased`.** The release hook only covers an episode becoming
+*more* visible; this one covers the leak — an episode becoming *less* visible while something you cached
+still names it:
+
+```diff
+  ctx.onEpisodeReleased(this::open);
++ ctx.onEpisodePhaseChanged((slug, phase) -> {
++     if (phase == null || phase == EpisodePhase.PLANNED || phase == EpisodePhase.WITHDRAWN) {
++         republishIndex();        // drop it from what anonymous readers see, right now
++     }
++ });
+```
+
+Anything you compute **per request** (a sitemap, `ShareMetadataProvider`, `PageRouteProvider`,
+`SearchProvider`) was already correct and needs none of this.
+
+**5. If you implement `UserDataHandler`, add `exportFiles` for a real GDPR export — `exportUser` is now
+the fallback, not the feature.** The host asks `exportFiles` first; an empty `Optional` (the default) falls
+back to `exportUser` exactly as before, so a `Map`-only plugin keeps exporting with zero code changes.
+Implement `exportFiles` when your data has a format worth keeping as a format:
+
+```diff
+  @Override
+  public void eraseUser(String userId) { … }
++
++ @Override
++ public Optional<UserExport> exportFiles(String userId) {
++     List<Card> cards = cardsOf(userId);
++     if (cards.isEmpty()) return Optional.empty();
++     return Optional.of(UserExport.of(
++             ExportFile.text("cards.json", "application/json", toBingoV1(cards))));
++ }
+```
+
+Bounded by `UserExport.MAX_BYTES` (32 MiB) within `UserExport.TIMEOUT` (60 s) — exceed either and your part
+is recorded `failed`, never silently truncated. No `UserDataHandler` at all is fine and shows as
+`not-supported` rather than `empty` in the person's archive — core can tell "never implemented this" apart
+from "implemented it, had nothing."
+
+**TS compile fallout: none.** Every new field is optional or has a `default` method; `PluginBlobsDeclaration`
+already existed and just gained two optional fields. **Java compile fallout: none either** —
+`onEpisodePhaseChanged` is a `default void` the same way `onEpisodeReleased` is, so a hand-rolled
+`PluginContext` test double keeps compiling.
+
+**Test kit:** `InMemoryDocStore.withKeyFloor(pattern, readableBy, writableBy)`, `asUser(UUID, Role)` and
+`asAnonymous()`; `FakePluginContext.onEpisodePhaseChanged`/`fireEpisodePhaseChanged(slug, phase)`/
+`episodePhaseListenerCount()`; `UserDataHandlerHarness.exportFiles(userId)`. TS: `makeMockDocs(initial, {
+data, viewer })` for floor enforcement, `MockFeedsClient.batches` for asserting the `displayMany` split.
 
 ---
 
