@@ -803,7 +803,11 @@ every existing constructor call still compiles.
 
 - A `declaredType(file)` helper — `blobs.upload` normalises the declared MIME type by default now.
 - A `formatTime`/`formatBytes` pair that hardcodes `.` as the decimal separator — use
-  `i18n.duration(seconds)` / `i18n.bytes(quota.usedBytes)` from `createPluginI18n`.
+  `i18n.duration(seconds)` / `i18n.bytes(quota.usedBytes)` from `createPluginI18n`. **`i18n.bytes` formats in
+  binary units since SDK 0.19.1** (`KiB`/`MiB`/`GiB`/`TiB`, 1 KiB = 1024 B — matching core's own admin, which
+  shows a plugin's quota in MiB) — before 0.19.1 it was decimal (`268.4 MB` for the same quota). A component
+  test pinning the old decimal output needs the binary one instead; below 1 KiB it now spells out the
+  locale's own word, plural included (`0 bytes`, `1 byte`).
 - An English-shaped `n === 1 ? … : …` plural — use `i18n.plural('moments', n)` with catalog keys
   `moments.one`/`moments.other`.
 - A hand-rolled icon-CSS file — `iconCss(['star', 'clock'])` replaces it, and fixes a real bug if your

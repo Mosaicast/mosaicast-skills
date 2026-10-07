@@ -10,31 +10,40 @@ doc and this skill disagree, see "Which docs to trust" below.
 
 ## Version pins — get these wrong and the plugin does not load
 
-Contract version is **0.19.0** (`PlatformApi.VERSION`, `PLATFORM_API_VERSION`), and core **0.8.0** hosts it.
-The host demands an **exact `major.minor`** match; patch is free. A `0.18.x` manifest is *rejected at load*,
-not warned about — and a 0.19 plugin is rejected by core 0.7.x, so check which core you target. Core's own
-minor moved 0.7.8 → 0.8.0 **without another `platformApi` bump** — the GDPR file-export wiring (below) landed
-without changing the contract, since the SDK already shipped the interface at 0.19.0; core's minor tracks its
-own build milestones independently of the plugin contract (see `backend.md`'s `UserDataHandler` section).
+Contract version is **0.19.0** (`PlatformApi.VERSION`), and core **0.8.2** hosts it — but
+`PLATFORM_API_VERSION` in the SDK itself reads **`'0.19.1'`** (the current patch), and the host matches on
+exact `major.minor` only, so `"0.19.0"` and `"0.19.1"` both load. If your own manifest contract test
+compares `platformApi` against `PLATFORM_API_VERSION` literally, write `"0.19.1"` — same reasoning as the
+0.16.1 precedent below. A `0.18.x` manifest is still *rejected at load*, not warned about, and a 0.19 plugin
+is rejected by core 0.7.x. Core's own minor moved 0.7.8 → 0.8.0 → 0.8.1 → 0.8.2 **without another
+`platformApi` bump** — the GDPR file-export wiring, the feed-deletion phase event and the streamed blob
+reads all landed as core patches/minors with no contract change; core's minor tracks its own build
+milestones independently of the plugin contract (see `backend.md`'s `UserDataHandler` section).
 
 ```json5
-"platformApi": "0.19.0"                                 // plugin.json
+"platformApi": "0.19.1"                                 // plugin.json — "0.19.0" also loads; keep one string
 ```
 ```kotlin
-compileOnly("dev.mosaicast:plugin-api:0.19.0")          // backend/build.gradle.kts
+compileOnly("dev.mosaicast:plugin-api:0.19.1")          // backend/build.gradle.kts
 compileOnly("org.pf4j:pf4j:3.16.0")
 annotationProcessor("org.pf4j:pf4j:3.16.0")             // mandatory: generates the @Extension index
-testImplementation("dev.mosaicast:plugin-testkit:0.19.0")
+testImplementation("dev.mosaicast:plugin-testkit:0.19.1")
 ```
 ```json5
-"@mosaicast/plugin-sdk": "0.19.0"                       // frontend/package.json
+"@mosaicast/plugin-sdk": "0.19.1"                       // frontend/package.json
 ```
 
-Both halves of `0.19.0` are published on npm and GitHub Packages (tag `v0.19.0`) — no `mavenLocal()`
+Both halves of `0.19.1` are published on npm and GitHub Packages (tag `v0.19.1`) — no `mavenLocal()`
 workaround needed. Maven is GitHub Packages
 (`https://maven.pkg.github.com/Mosaicast/mosaicast-plugin-sdk`), which needs a PAT with `read:packages`
 **even for public reads**. Jackson is **3.2.2** (`tools.jackson.*`), not `com.fasterxml`. **Pin the same
 string in all four places** — the CI drift guard and the manifest contract test both compare them.
+
+**0.19.0 → 0.19.1 is a patch, nothing to re-declare.** Two things worth knowing anyway: `i18n.bytes` (from
+`createPluginI18n`) now formats in **binary units** (`KiB`/`MiB`/`GiB`/`TiB`, matching core's admin) instead
+of decimal — a component test pinning the old `'268.4 MB'`-style output needs the binary one; and
+`PluginContext.onEpisodePhaseChanged`'s javadoc now documents that calls arrive **concurrently** (see rule
+40 below) — that was true since 0.19.0, just undocumented here until now.
 
 Coming from an older pin? `references/migrating.md` walks 0.8.0 → 0.9.0 → 0.9.1 → 0.10.0 → 0.11.0 → 0.12.0 →
 0.13.0 → 0.14.0 → 0.15.0 → 0.16.0 → 0.17.0 → 0.18.0 → 0.19.0 in order — read it top to bottom rather than
@@ -239,6 +248,14 @@ To re-check the pin yourself:
     **this person only**: a leaderboard row that merely mentions them is not theirs to hand over. No
     `UserDataHandler` at all shows as **`not-supported`** in the person's archive, not `empty` — core can
     tell "said nothing" apart from "nothing to ask."
+40. **`onEpisodePhaseChanged` calls arrive concurrently, not one at a time — guard shared state with
+    `ReentrantLock`, never `synchronized`** (SDK 0.19.1 javadoc). Each event is its own task on its own
+    thread; deleting a feed with many episodes is the case that makes this obvious, since every one of its
+    episodes fires at once. If your listener coalesces (one pass handles several calls rather than
+    recomputing per slug), the lock guarding that must be `java.util.concurrent.locks.ReentrantLock` — the
+    host's threads are virtual, and on Java 21 a virtual thread blocked on a `synchronized` monitor **pins
+    its carrier thread**, which starves every other virtual thread sharing it. Not a style nit; a real
+    incident waiting for enough concurrent episodes.
 
 ## Before you build: ask for a browser and an instance
 
@@ -297,16 +314,17 @@ Five distinct URL namespaces, don't conflate them:
 | Browser + live-instance setup, viewport matrix, data-safety rules, the build→install→restart loop, installing a released plugin by spec | `references/dev-environment.md` |
 | Moving an existing plugin from 0.8.x up to 0.19.0 | `references/migrating.md` |
 
-Live reference implementation: **`mosaicast-plugin-sample` 2.19.0 on SDK 0.18.0** (check it merged and
-tagged before trusting it). **Lagging again at the time of writing** — it has not yet picked up 0.19.0, so
-don't expect to find `keyFloors`, `schemaReadableBy`, `onEpisodePhaseChanged` or `exportFiles` in it. What it
-does exercise, still accurately: `feed`/`season`/`episodeNo`, the live `ctx.filter`, `identity`,
-`notifications`, `tags`, `external`, `blobs`, `data.readsAllUsers`, bounded config, a labelled consent
-category and a four-entry `nav[]` (with `visibleTo`, not the SDK type's `role`), Markdown through
-`ctx.sanitize`, and `ctx.blobs`/`ctx.links`/`ctx.route.navigate`. Its `README.md` carries the worked `curl`
-forgery that motivates `backendOwned`, and its `docs/BRIEF.md` pattern is the definition of done for every
-plugin repo. For foreign HTML that must keep the plugin's own `class`/`data-*` markup, the pattern to copy
-is `mosaicast-plugin-wiki` 0.5.0's `markdown.ts`.
+Live reference implementation: **`mosaicast-plugin-sample` 2.20.1 on SDK 0.19.1** (check it merged and
+tagged before trusting it — it caught up from 2.19.0/0.18.0 since the last pass). It exercises `keyFloors`
+(`plugin.json`: `drafts`/`announced` raised to `podcaster`) and `onEpisodePhaseChanged`, but **not**
+`storage.schemaReadableBy` or `UserDataHandler.exportFiles` — don't expect either in it. What it does
+exercise, still accurately: `feed`/`season`/`episodeNo`, the live `ctx.filter`, `identity`, `notifications`,
+`tags`, `external`, `blobs`, `data.readsAllUsers`, bounded config, a labelled consent category and a
+four-entry `nav[]` (with `visibleTo`, not the SDK type's `role`), Markdown through `ctx.sanitize`, and
+`ctx.blobs`/`ctx.links`/`ctx.route.navigate`. Its `README.md` carries the worked `curl` forgery that
+motivates `backendOwned`, and its `docs/BRIEF.md` pattern is the definition of done for every plugin repo.
+For foreign HTML that must keep the plugin's own `class`/`data-*` markup, the pattern to copy is
+`mosaicast-plugin-wiki` 0.5.0's `markdown.ts`.
 
 ## Which docs to trust
 

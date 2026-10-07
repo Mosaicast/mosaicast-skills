@@ -13,7 +13,7 @@ rejected.
 {
   "id": "sample",
   "version": "2.17.0",
-  "platformApi": "0.19.0",
+  "platformApi": "0.19.1",
   "name": "Sample",
   "license": "Apache-2.0",
   "author": "The Mosaicast Authors",
