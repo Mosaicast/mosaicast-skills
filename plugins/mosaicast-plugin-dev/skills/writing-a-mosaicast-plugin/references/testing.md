@@ -4,7 +4,7 @@ Required by every repo's `docs/BRIEF.md` DoD (ARCHITECTURE §13.5). No core, no 
 
 ## Backend — `dev.mosaicast.plugin.testkit.*`
 
-`testImplementation("dev.mosaicast:plugin-testkit:0.19.0")`
+`testImplementation("dev.mosaicast:plugin-testkit:0.19.1")`
 
 | Fake | Notes |
 |---|---|

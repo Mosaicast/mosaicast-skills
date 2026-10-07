@@ -122,9 +122,21 @@ release, a withdrawal, a withdrawn episode coming back, and a cancellation. On c
 receives `phase == null`: the episode no longer exists, its episode-scoped documents are already gone with
 it, but anything your *other* scopes say about it (that site-wide index again) is yours to drop.
 **Deleting a feed fires it too, once per episode, with `phase == null` (core 0.8.1)** — the same "no longer
-exists" signal a cancelled plan already gets, so one `null`-handling branch covers both. A feed with many
-episodes publishes its events one-by-one, each plugin's listeners on their own thread, so the deletion
-request itself does not wait on them.
+exists" signal a cancelled plan already gets, so one `null`-handling branch covers both.
+
+
+**Expect concurrent calls — this is not "one at a time," and deleting a feed is exactly where it bites.**
+Each event is its own task on its own thread, so a write touching many episodes reaches your listener as
+many calls *at once*, in no guaranteed order, every one of them already seeing every episode gone. A
+listener that republishes something expensive on each call (a site-wide index, say) should **coalesce**:
+let one pass run and have the rest mark it dirty, rather than recomputing once per slug. **Guard that
+coalescing with a `java.util.concurrent.locks.ReentrantLock`, not `synchronized`** — the host's threads are
+virtual, and on Java 21 a virtual thread blocked on a `synchronized` monitor pins its carrier thread, which
+is the exact platform-thread-starvation failure virtual threads exist to avoid. This isn't a style
+preference; `synchronized` here is a real production incident waiting on enough concurrent episodes.
+**`mosaicast-plugin-sample` 2.20.1 itself still coalesces its recompute with `synchronized (RECOMPUTE_LOCK)`**
+(`recomputeHighlightStats`) — written the same day as the SDK 0.19.0 upgrade, before this javadoc landed at
+0.19.1. Don't copy that part of it; it's exactly the pattern this rule exists to stop.
 
 **When it does not fire:** the clock passing `announceAt` on its own involves no write, so nothing calls
 this for a `PLANNED → UPCOMING` transition — that direction only makes an episode *more* visible, and being
