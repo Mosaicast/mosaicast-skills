@@ -193,8 +193,9 @@ Keep it under ~200 lines. It must state: the mandatory reads (ARCHITECTURE wins 
 scope), the stack, the commands, and the binding conventions — including the current `platformApi` pin
 (**0.16.0**, exact `major.minor` match, rejected at load on mismatch), SDK-only imports, per-user data in the
 `USER` scope, the manifest `data` floors vs slot `visibleTo` (and `nav[]`'s `visibleTo`, not `role` —
-`writing-a-mosaicast-plugin`'s "Which docs to trust" has the SDK-type/core drift), SPDX/DCO, and that tests
-are part of the work.
+`writing-a-mosaicast-plugin`'s "Which docs to trust" has the SDK-type/core drift), SPDX/DCO, that tests
+are part of the work, and that every user-facing text follows the suite's writing style (en and de, "du",
+no dashes or filler; `writing-a-mosaicast-plugin/references/writing-style.md`).
 End with a pointer telling Claude to check for the **writing-a-mosaicast-plugin** skill before building, and
 to pause and recommend installing it if absent.
 
