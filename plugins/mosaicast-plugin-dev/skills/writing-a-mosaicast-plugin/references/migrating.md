@@ -1,6 +1,6 @@
-# Migrating an existing plugin up to 0.19.0
+# Migrating an existing plugin up to 0.20.0
 
-The SDK's own `MIGRATION.md` (in the `mosaicast-plugin-sdk` checkout, or `v0.19.0/MIGRATION.md` on GitHub —
+The SDK's own `MIGRATION.md` (in the `mosaicast-plugin-sdk` checkout, or `v0.20.0/MIGRATION.md` on GitHub —
 0.15.0 was once tagged only `0.15.0` without the `v`; both forms resolve now) is the authoritative checklist for the
 **SDK** half of each step — read it, it is short and version-scoped. This file adds two things that doc
 does not: the **core-side** changes each release shipped alongside it, and one file walking the **whole
@@ -29,9 +29,146 @@ first (file storage, `ctx.links`), then start here.
 | 0.16.x → 0.17.0 | Yes (`platformApi`) | No — new, optional fields and a live `ctx.filter`; nothing removed | `DisplaySnapshot.feed`/`.season`/`.episodeNo`, `seasonScope()`, a live `ctx.filter`, uncapped `ctx.episodes`, ZIP uploads, per-`blobs` floors |
 | 0.17.x → 0.18.0 | Yes (`platformApi`) | **Yes — a hand-built `ctx.episode` in TS tests** (`phase` now required) | `ctx.episode.phase`/`.announceAt`, `DisplaySnapshot.phase`/`.announceAt`, `onEpisodeReleased`, planned-episode visibility |
 | 0.18.x → 0.19.0 | Yes (`platformApi`; `keyFloors`/`schemaReadableBy` only if you use them) | No — new, optional manifest fields and surfaces; nothing removed | `data.keyFloors`, `storage.schemaReadableBy`, `onEpisodePhaseChanged`, `UserDataHandler.exportFiles` (GDPR), uncapped `displayMany` |
+| 0.19.x → 0.20.0 | Yes (`platformApi`; `actions`/`channels` only if you use them) | **Yes — `PluginContext` gained three abstract methods** (a hand-rolled test double must add them; `FakePluginContext` already has them) | `actions`, `channels`, `ctx.runAfter` timers, `data.backendPrivate` — realtime (§7.9) |
 
-Do them **in order**; do not skip to 0.19.0 and back-port the manifest fields, because 0.9.0's compile
+Do them **in order**; do not skip to 0.20.0 and back-port the manifest fields, because 0.9.0's compile
 break and 0.10.0's `ctx.translation` addition both have to land first for the later steps to make sense.
+
+---
+
+## 0.19.x → 0.20.0: realtime — actions, channels, timers, backend-private state
+
+Needs **core 0.10.0** — a 0.20 plugin calling `ctx.actions()`/`ctx.channels()`/`ctx.runAfter(...)` against
+an older host's `plugin-api` jar (loaded parent-first) fails with `NoSuchMethodError` before the
+exact-`major.minor` check even runs; those three became **abstract** on `PluginContext`, not `default`, so
+the break is real either way. `mosaicast-plugin-sample` 2.21.0 has already moved and exercises all four new
+surfaces (`actions`, `channels`, `runAfter`, `backendPrivate`) — a real worked example, check its tag is
+still current before copying from it.
+
+**Required.**
+
+```diff
+- "platformApi": "0.19.1",
++ "platformApi": "0.20.0",
+- compileOnly("dev.mosaicast:plugin-api:0.19.1")      testImplementation("…plugin-testkit:0.19.1")
++ compileOnly("dev.mosaicast:plugin-api:0.20.0")      testImplementation("…plugin-testkit:0.20.0")
+- "@mosaicast/plugin-sdk": "0.19.1"
++ "@mosaicast/plugin-sdk": "0.20.0"
+```
+
+**The one compile break that isn't opt-in: `PluginContext` gained three abstract methods.** Unlike every
+earlier addition (`onEpisodeReleased`, `onEpisodePhaseChanged`, …), `actions()`, `channels()` and
+`runAfter(Duration, Runnable)` are **not** `default` methods — a hand-rolled `PluginContext` implementation
+of your own (not `FakePluginContext`, which already has them) must add all three to keep compiling:
+
+```diff
+  public class MyFakeContext implements PluginContext {
+      // … existing methods …
++     @Override public Actions actions() { return null; }
++     @Override public Channels channels() { return null; }
++     @Override public Scheduled runAfter(Duration delay, Runnable task) { throw new UnsupportedOperationException(); }
+  }
+```
+
+A TS `makeMockCtx`-built context gains `actions: null` and `channels: null` with nothing to do — the mock
+already defaults every optional surface to absent.
+
+**Everything else is opt-in.** If you're not building a turn-based or live-updating feature, there's
+nothing more to do than the version bump above. If you are:
+
+**1. Request-time checks go in an `actions` block + handler, not a doc-store write a schedule reads
+later.** That gap — a client writes, the next tick (floored at 10 s) reads it, the client polls — is
+exactly what actions replace for anything that must be checked the instant it happens:
+
+```diff
++ "actions": { "callableBy": "fan", "names": { "move": {} }, "perUserPerMinute": 120 },
+  "data": { "readableBy": "fan", "writableBy": "podcaster" }
+```
+```diff
+  public void register(PluginContext ctx) {
++     ctx.actions().handle("move", call -> {
++         Game game = load(ctx.store(), call.scope());
++         if (!game.turn().equals(call.caller().userId())) throw new ActionRejectedException("not-your-turn");
++         game.apply(call.payload(Move.class));
++         ctx.store().put(call.scope(), "game:state", game);
++         return game.publicView();
++     });
+  }
+```
+
+**2. Live updates go through a `channels` block + `authorize`, not a frontend poll.** Without an
+`authorize` callback registered, every subscribe is refused — this is the one piece of wiring the manifest
+can't declare for you:
+
+```diff
++ "channels": { "subscribableBy": "fan", "perUserSubscriptions": 4 }
+```
+```diff
+  public void register(PluginContext ctx) {
++     ctx.channels().authorize((caller, ref) -> isPlayer(ref, caller.userId()));
++     ctx.actions().handle("move", call -> {
++         // … as above …
++         ctx.channels().channel(call.scope(), "game").publish("moved", game.publicView());
++         return game.publicView();
++     });
+  }
+```
+```diff
+- const poll = setInterval(() => fetchState(), 2000);
++ const sub = ctx.channels!.subscribe('game', (e) => apply(e), { onReset: () => load(), onStatus });
++ await load();   // subscribe first, then fetch through an action — never the other way round
+```
+
+**3. A turn clock or a debounced recompute is `ctx.runAfter`, not a short `onSchedule`.** `onSchedule`'s
+10 s floor exists for *periodic* work; a one-shot timer has no floor because it structurally can't become a
+busy loop:
+
+```diff
+- ctx.onSchedule(Duration.ofSeconds(30), () -> maybeTimeOut(ctx, scope));   // fires every 30s forever
++ Scheduled timer = ctx.runAfter(Duration.ofSeconds(30), () -> timeOut(ctx, scope));   // fires once
+```
+Persist the deadline and re-arm in `register(ctx)` — a restart drops every pending `runAfter` task.
+
+**4. State an action decides what to reveal of goes under `data.backendPrivate`, not `keyFloors`.**
+`keyFloors`' highest floor is still `admin`; `backendPrivate` has no ceiling — nobody over HTTP, ever:
+
+```diff
+- "data": { "readableBy": "fan", "writableBy": "podcaster", "keyFloors": [{ "keys": ["game:*"], "readableBy": "admin" }] }
++ "data": { "readableBy": "fan", "writableBy": "podcaster", "backendPrivate": ["game:*"] }
+```
+
+**Concurrency is the one thing every one of the above shares, and it's new.** Action handlers, channel
+join/leave callbacks and `runAfter` tasks all run **concurrently with each other** on the plugin's own
+executor — never the request thread. The host promises ordering only through `ActionCall.receivedAt()`
+(stamped before queueing). **Synchronize your own state** — a `synchronized` block works but pins a
+virtual thread's carrier under contention (Java 21); prefer `java.util.concurrent.locks.ReentrantLock`,
+same guidance `onEpisodePhaseChanged` already carries.
+
+**TS compile fallout: none beyond the `actions`/`channels: null` default above.** Every new export
+(`ActionsClient`, `ChannelsClient`, `isActionRejected`, `isRateLimited`, `PROBLEM_TYPES`'s new members, …)
+is additive. **Java compile fallout:** only the three abstract `PluginContext` methods above, and only for
+a hand-rolled implementation.
+
+**Test kit:** `FakePluginContext.withActions(names…)`/`.withChannels()`, `Callers.fan()`/`.podcaster()`/
+`.admin()`, `FakeActions.call(caller, name, scope, payload)`, `FakeChannels.subscribe(caller, ref)` (throws
+`SubscriptionRefusedException` on a refusal), `advanceTimers(Duration)`/`pendingTimers()`,
+`InMemoryDocStore.withBackendPrivate(...)`. TS: `makeMockActions(handlers, opts)`,
+`makeMockChannels(opts)` with `emit`/`reset`/`refuse`/`end`. Full detail and worked examples:
+`references/realtime.md`.
+
+**Recommended, now that it ships: drop the GitHub Packages block.** Since SDK 0.19.2 the Java artifacts are
+on Maven Central — if your build still has a `maven { url = uri(".../mosaicast-plugin-sdk") }` block and a
+`read:packages` PAT in CI, both can go:
+
+```diff
+  repositories {
+      mavenCentral()
+-     maven {
+-         url = uri("https://maven.pkg.github.com/Mosaicast/mosaicast-plugin-sdk")
+-         credentials { username = …; password = … }
+-     }
+  }
+```
 
 ---
 

@@ -72,6 +72,8 @@ users: UserDirectory | null                                      // null unless 
 notify: NotifyClient | null                                      // null unless the manifest declares `notifications` (0.14.0)
 schema: SchemaClient | null                                     // null unless the manifest declares storage.schema
 blobs: BlobClient | null                                        // null unless the manifest declares a blobs block
+actions: ActionsClient | null                                   // null unless the manifest declares an actions block (0.20.0)
+channels: ChannelsClient | null                                 // null unless the manifest declares a channels block (0.20.0)
 log(level: 'debug'|'info'|'warn'|'error', message: string): void
 consent: { has(cat), granted(), request(cat): Promise<boolean>, onChange(cb): Unsubscribe }
 filter:  { current(): FilterState; onChange(cb): Unsubscribe }  // read-only — plugins consume, never define axes
@@ -95,12 +97,18 @@ Also exported: `PLATFORM_API_VERSION`, `SELF_SCOPE_ID` (`'me'`), `DataScopeType`
 `FeedsClient`/`DISPLAY_BATCH_LIMIT`, `TagsClient`/`TagInfo`, `UserDirectory`/`UserRef`,
 `NotifyClient`/`NotifyMessage`/`notifyText`, `TranslationClient`/`TranslationRequest`/
 `TranslationResult`, `LocaleInfo`, `PluginApiError`/`isPluginApiError`/`ProblemDetail`,
-`PROBLEM_TYPES` (0.19.0), `EpisodeStatus`/`EpisodePhase` (0.18.0), `resolveArtwork(snapshot)`,
+`PROBLEM_TYPES` (0.19.0, gains `backendPrivateKey`/`badRequest`/`notFound`/`unknownAction`/
+`payloadTooLarge`/`tooManyRequests`/`actionUnavailable`/`actionRejected`/`actionBusy`/`actionTimeout` at
+0.20.0), `EpisodeStatus`/`EpisodePhase` (0.18.0), `resolveArtwork(snapshot)`,
 `seasonScope(feed, n)`/`resolveSeasonScope(snapshot)` (0.17.0), `matchRoute(path, patterns)`,
-`iconCss`/`iconMask`, `createPluginI18n`, and the documentation-only manifest types (`PluginManifest`,
-`PluginTagsDeclaration`, `PluginExternalDeclaration`, `ExternalServiceKind`, `PluginNavDeclaration`,
-`PluginIdentityDeclaration`, `PluginNotificationsDeclaration`, `PluginBlobsDeclaration`,
-`PluginKeyFloorDeclaration` (0.19.0), …).
+`iconCss`/`iconMask`, `createPluginI18n`, `isActionRejected`/`isRateLimited`,
+`ActionsClient`/`ActionCallOptions`/`ACTION_NAME_PATTERN`/`ACTION_BODY_LIMIT`,
+`ChannelsClient`/`ChannelSubscription`/`ChannelEvent`/`ChannelStatus`/`ChannelSubscribeOptions`/
+`CHANNEL_NAME_PATTERN`/`CHANNEL_EVENT_LIMIT` (all 0.20.0 — see `references/realtime.md`), and the
+documentation-only manifest types (`PluginManifest`, `PluginTagsDeclaration`, `PluginExternalDeclaration`,
+`ExternalServiceKind`, `PluginNavDeclaration`, `PluginIdentityDeclaration`, `PluginNotificationsDeclaration`,
+`PluginBlobsDeclaration`, `PluginKeyFloorDeclaration` (0.19.0), `PluginActionsDeclaration`/
+`PluginActionNameDeclaration`/`PluginChannelsDeclaration` (0.20.0), …).
 **`PluginBlobsDeclaration` has existed since 0.9.0** (`maxFileBytes`/`quotaBytes`/`mimeTypes`, plus the
 optional `readableBy`/`writableBy` pair since 0.18.0) — a prior revision of this skill claimed there was no
 TS type for the `blobs` block at all; that was simply wrong, not just stale. Core still validates and is
@@ -112,7 +120,9 @@ Verified against core's `frontend/src/plugins/buildCtx.ts` and `PluginMount.tsx`
 until core says otherwise. **`docs`, `feeds`, `tags`, `users`, `notify`, `schema`, `blobs`, `translation`,
 `locale.available/content`, `consent.has/granted/request`, `filter` (since 0.7.6) and, since 0.7.7, `episode`
 are real, wired implementations** — the "contract ahead of implementation" gap 0.9.0 shipped with has closed
-for all of them.
+for all of them. **`actions`/`channels` shipped wired from day one (0.20.0)** — unlike several earlier
+additions, there was no separate "SDK ships the interface, core wires it later" gap to track here; see
+`references/realtime.md`.
 
 **The 4×/s `ctx` churn `MosaicastHandle` (0.15.0) exists to survive is itself already fixed on the host
 side, as of 0.7.2.** `PluginMount.tsx` wraps `buildCtx(...)` in `useMemo`, and the player-time reader in its

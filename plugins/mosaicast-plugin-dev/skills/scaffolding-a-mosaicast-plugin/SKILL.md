@@ -99,29 +99,29 @@ java { toolchain { languageVersion.set(JavaLanguageVersion.of(21)) } }
 
 repositories {
     mavenLocal()          // dev-time: an SDK checkout, or includeBuild("../mosaicast-plugin-sdk")
-    mavenCentral()
-    maven {
-        url = uri("https://maven.pkg.github.com/Mosaicast/mosaicast-plugin-sdk")
-        credentials {     // GitHub Packages needs auth even for public reads
-            username = providers.gradleProperty("gpr.user").orElse(providers.environmentVariable("GITHUB_ACTOR")).orNull
-            password = providers.gradleProperty("gpr.token").orElse(providers.environmentVariable("GITHUB_TOKEN")).orNull
-        }
-    }
+    mavenCentral()         // the Java artifacts live here since SDK 0.19.2 — no PAT needed
 }
 
 dependencies {
-    compileOnly("dev.mosaicast:plugin-api:0.16.0")
+    compileOnly("dev.mosaicast:plugin-api:0.20.0")
     compileOnly("org.pf4j:pf4j:3.16.0")
     annotationProcessor("org.pf4j:pf4j:3.16.0")   // generates the extension index — without it nothing loads
     testImplementation(platform("org.junit:junit-bom:6.1.3"))
     testImplementation("org.junit.jupiter:junit-jupiter")
-    testImplementation("dev.mosaicast:plugin-testkit:0.16.0")
+    testImplementation("dev.mosaicast:plugin-testkit:0.20.0")
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
 }
 ```
 
 `compileOnly`, not `implementation` — the host provides the API. Never add Spring; PF4J classloading inside
 core's fat JAR is fiddly and plain extensions are the mitigation.
+
+**No GitHub Packages block, no `read:packages` PAT, no `GITHUB_ACTOR`/`GITHUB_TOKEN` in CI.** That was
+mandatory through SDK 0.19.1; since 0.19.2 the signed Java artifacts (`plugin-api`, `plugin-testkit`) are on
+**Maven Central**, so plain `mavenCentral()` resolves them. GitHub Packages still mirrors every release for
+now (so a repo pinned below 0.19.2 isn't stranded), but a new plugin has no reason to carry that block or
+its credentials at all. If you're updating an existing repo rather than scaffolding a new one, see
+`writing-a-mosaicast-plugin/references/migrating.md`'s "drop the GitHub Packages block" note.
 
 ## Frontend setup
 
@@ -161,8 +161,8 @@ anywhere but the sample, fix them:
 
 ## CI — three jobs
 
-1. **backend** — Temurin 21, gradle cache, `./gradlew --no-daemon clean build`, with
-   `GITHUB_ACTOR`/`GITHUB_TOKEN` for the Packages read.
+1. **backend** — Temurin 21, gradle cache, `./gradlew --no-daemon clean build`. No `GITHUB_ACTOR`/
+   `GITHUB_TOKEN` needed any more — `mavenCentral()` resolves the SDK artifacts with no auth (since 0.19.2).
 2. **frontend** — Node 20, `npm ci`, **typecheck**, build, test.
 3. **package** — run `./build.sh`, then assert `dist/plugin.json`, `dist/<id>.jar` and
    `dist/assets/<id>.es.js` are non-empty, **and that `plugin.json`'s `platformApi` matches the
@@ -191,7 +191,7 @@ and `license-header.yml` (SPDX header on changed source files).
 
 Keep it under ~200 lines. It must state: the mandatory reads (ARCHITECTURE wins on conflict; BRIEF defines
 scope), the stack, the commands, and the binding conventions — including the current `platformApi` pin
-(**0.16.0**, exact `major.minor` match, rejected at load on mismatch), SDK-only imports, per-user data in the
+(**0.20.0**, exact `major.minor` match, rejected at load on mismatch), SDK-only imports, per-user data in the
 `USER` scope, the manifest `data` floors vs slot `visibleTo` (and `nav[]`'s `visibleTo`, not `role` —
 `writing-a-mosaicast-plugin`'s "Which docs to trust" has the SDK-type/core drift), SPDX/DCO, that tests
 are part of the work, and that every user-facing text follows the suite's writing style (en and de, "du",

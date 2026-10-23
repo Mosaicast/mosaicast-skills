@@ -1,6 +1,6 @@
 ---
 name: writing-a-mosaicast-plugin
-description: Use when creating or modifying a Mosaicast plugin (any mosaicast-plugin-* repo or the plugin-sample). Covers the plugin.json manifest (slots and placements, the page slot behind /p/<id>/*, data access floors, backendOwned keys, consent services, doc vs schema storage, the blobs file-storage block (its own optional readableBy/writableBy floors, separate from data's, and ZIP as a storable type), the tags vocabulary block, the external-services block, the identity block (ctx.users, resolving user UUIDs to a name/avatar), the notifications block (ctx.notify/ctx.notifier, putting a message in a user's inbox), nav entrances into the host menu, config fields with a localized label/description and a closed options set, the license/author/homepage/attribution credit fields), the backend PluginBackend/PluginContext contract (including onSchedule's Supplier<Duration> overload for a schedule that actually follows config) and its optional extension points (ShareMetadataProvider and its per-URL OgMeta.locale, SitemapProvider and its hreflang-alternates SitemapUrl.alternates, PageRouteProvider, SearchProvider, UserDataHandler and its exportFiles/UserExport/ExportFile GDPR file export), per-user data in the USER scope, data.keyFloors for raising a doc-store key's floor above the plugin's own, storage.schemaReadableBy for the schema surface's own read floor, the frontend Web Component via the SDK ctx (ctx.docs, ctx.feeds, ctx.tags, ctx.users, ctx.notify, ctx.schema reads, ctx.blobs uploads, ctx.links, ctx.locale.available/content, ctx.translation, ctx.route.navigate, the live ctx.filter, the uncapped and now-unclamped ctx.episodes/displayMany, and ctx.episode's status/phase/announceAt, typed ctx.api errors including the keyFloor problem type) plus DisplaySnapshot's feed/season/episodeNo/phase/announceAt identity fields (season/episodeNo now also podcaster-hand-settable and possibly 0), seasonScope()/resolveSeasonScope(), onEpisodeReleased and onEpisodePhaseChanged for reacting to an episode's release or phase change, defineMosaicastElement's MosaicastHandle (a render surviving a reassigned ctx instead of being torn down) and theme tokens including the --mc-icon-* icon set, testing against the SDK test kit, and installing a plugin by spec (owner/repo@tag#sha256). Trigger whenever writing the manifest, adding a slot, wiring ctx, storing per-user data, uploading or serving files, linking to core pages, querying schema tables from the frontend, reading or writing the shared tag vocabulary, contributing to site search, handling account deletion/export, real 404s for a page plugin's unknown subpaths, declaring external-service (translation) use, declaring what language a plugin page or sitemap translation group is written in, resolving user ids to a display name/avatar, sending an in-app notification to a user, adding a nav entrance, labeling or restricting a config field, making a scheduled task follow a configurable interval, keeping a component's state across a re-rendered ctx, sanitizing HTML a plugin did not write (ctx.sanitize), aggregating over every user's data (data.readsAllUsers / ctx.allUsers), bounding a config value, labelling a consent category, navigating inside a page plugin, declaring backend-owned or schema storage, styling a plugin tile's icons, crediting a plugin's license or data source, bumping platformApi, installing or releasing a plugin, placing an episode in its season or feed for a per-season aggregate, reading the visitor's active season/tag/sort filter, storing a ZIP archive, declaring an upload floor stricter than the plugin's data floor, preparing content for a planned/quiet episode before it is announced, reacting to an episode's release, branching on an episode's release phase, reacting to an episode becoming less visible, raising a specific doc-store key's access floor above the plugin's own, gating schema reads separately from data reads, handling an episode's hand-set season or episode number, exporting a plugin's data for a GDPR request, writing or translating any user-facing text (locale catalogs, config labels and descriptions, consent purposes, notification texts) in the suite's shared voice, or building a plugin's backend or frontend.
+description: Use when creating or modifying a Mosaicast plugin (any mosaicast-plugin-* repo or the plugin-sample). Covers the plugin.json manifest (slots and placements, the page slot behind /p/<id>/*, data access floors, backendOwned keys, consent services, doc vs schema storage, the blobs file-storage block (its own optional readableBy/writableBy floors, separate from data's, and ZIP as a storable type), the tags vocabulary block, the external-services block, the identity block (ctx.users, resolving user UUIDs to a name/avatar), the notifications block (ctx.notify/ctx.notifier, putting a message in a user's inbox), nav entrances into the host menu, config fields with a localized label/description and a closed options set, the license/author/homepage/attribution credit fields), the backend PluginBackend/PluginContext contract (including onSchedule's Supplier<Duration> overload for a schedule that actually follows config) and its optional extension points (ShareMetadataProvider and its per-URL OgMeta.locale, SitemapProvider and its hreflang-alternates SitemapUrl.alternates, PageRouteProvider, SearchProvider, UserDataHandler and its exportFiles/UserExport/ExportFile GDPR file export), per-user data in the USER scope, data.keyFloors for raising a doc-store key's floor above the plugin's own, storage.schemaReadableBy for the schema surface's own read floor, data.backendPrivate for state no client reaches at all, the actions and channels manifest blocks for realtime request-time calls and live push events, the frontend Web Component via the SDK ctx (ctx.docs, ctx.feeds, ctx.tags, ctx.users, ctx.notify, ctx.schema reads, ctx.blobs uploads, ctx.links, ctx.locale.available/content, ctx.translation, ctx.route.navigate, ctx.actions.call and ctx.channels.subscribe, the live ctx.filter, the uncapped and now-unclamped ctx.episodes/displayMany, and ctx.episode's status/phase/announceAt, typed ctx.api errors including the keyFloor, backendPrivateKey, actionRejected and rate-limit problem types) plus PluginContext.actions()/channels()/runAfter() on the backend (Actions.handle, ActionCall, ActionRejectedException, Channels.authorize/publish/publishTo/kick, Scheduled.cancel), DisplaySnapshot's feed/season/episodeNo/phase/announceAt identity fields (season/episodeNo now also podcaster-hand-settable and possibly 0), seasonScope()/resolveSeasonScope(), onEpisodeReleased and onEpisodePhaseChanged for reacting to an episode's release or phase change, defineMosaicastElement's MosaicastHandle (a render surviving a reassigned ctx instead of being torn down) and theme tokens including the --mc-icon-* icon set, testing against the SDK test kit, and installing a plugin by spec (owner/repo@tag#sha256). Trigger whenever writing the manifest, adding a slot, wiring ctx, storing per-user data, uploading or serving files, linking to core pages, querying schema tables from the frontend, reading or writing the shared tag vocabulary, contributing to site search, handling account deletion/export, real 404s for a page plugin's unknown subpaths, declaring external-service (translation) use, declaring what language a plugin page or sitemap translation group is written in, resolving user ids to a display name/avatar, sending an in-app notification to a user, adding a nav entrance, labeling or restricting a config field, making a scheduled task follow a configurable interval, keeping a component's state across a re-rendered ctx, sanitizing HTML a plugin did not write (ctx.sanitize), aggregating over every user's data (data.readsAllUsers / ctx.allUsers), bounding a config value, labelling a consent category, navigating inside a page plugin, declaring backend-owned or schema storage, styling a plugin tile's icons, crediting a plugin's license or data source, bumping platformApi, installing or releasing a plugin, placing an episode in its season or feed for a per-season aggregate, reading the visitor's active season/tag/sort filter, storing a ZIP archive, declaring an upload floor stricter than the plugin's data floor, preparing content for a planned/quiet episode before it is announced, reacting to an episode's release, branching on an episode's release phase, reacting to an episode becoming less visible, raising a specific doc-store key's access floor above the plugin's own, gating schema reads separately from data reads, handling an episode's hand-set season or episode number, exporting a plugin's data for a GDPR request, writing or translating any user-facing text (locale catalogs, config labels and descriptions, consent purposes, notification texts) in the suite's shared voice, building a turn-based game or any feature that checks input the moment it's made, pushing a live update to subscribed browsers without storing it, debouncing or delaying backend work with a one-shot timer, keeping backend state no client should ever read, dropping the GitHub Packages PAT now that the SDK is on Maven Central, wiring a visitor-feedback "forward upstream" target, or building a plugin's backend or frontend.
 ---
 
 # Writing a Mosaicast plugin
@@ -10,56 +10,69 @@ doc and this skill disagree, see "Which docs to trust" below.
 
 ## Version pins — get these wrong and the plugin does not load
 
-Contract version is **0.19.0** (`PlatformApi.VERSION`), and core **0.8.2** hosts it — but
-`PLATFORM_API_VERSION` in the SDK itself reads **`'0.19.1'`** (the current patch), and the host matches on
-exact `major.minor` only, so `"0.19.0"` and `"0.19.1"` both load. If your own manifest contract test
-compares `platformApi` against `PLATFORM_API_VERSION` literally, write `"0.19.1"` — same reasoning as the
-0.16.1 precedent below. A `0.18.x` manifest is still *rejected at load*, not warned about, and a 0.19 plugin
-is rejected by core 0.7.x. Core's own minor moved 0.7.8 → 0.8.0 → 0.8.1 → 0.8.2 **without another
-`platformApi` bump** — the GDPR file-export wiring, the feed-deletion phase event and the streamed blob
-reads all landed as core patches/minors with no contract change; core's minor tracks its own build
-milestones independently of the plugin contract (see `backend.md`'s `UserDataHandler` section).
+Contract version is **0.20.0** (`PlatformApi.VERSION`, `PLATFORM_API_VERSION`), and core **0.11.1** hosts
+it. The host demands an **exact `major.minor`** match; patch is free. A `0.19.x` manifest is *rejected at
+load*, not warned about, and a 0.20 plugin is rejected by core older than 0.10.0 — **the only core version
+where realtime (§7.9) landed and `mosaicastSdk` pinned 0.20.0**, and the one to check for if you're pinning
+an exact core version rather than "whatever's latest." Core's own minor went 0.9.x → **0.10.0** (realtime —
+built, versioned, never separately git-tagged) → **0.11.0** (`v0.11.0`, visitor feedback, §20 — core-only,
+no plugin API, no further contract change) → **0.11.1** (`v0.11.1`, a channel-event delivery-ordering fix).
+Core's minor tracks its own build milestones independently of the plugin contract, same as always.
 
 ```json5
-"platformApi": "0.19.1"                                 // plugin.json — "0.19.0" also loads; keep one string
+"platformApi": "0.20.0"                                 // plugin.json
 ```
 ```kotlin
-compileOnly("dev.mosaicast:plugin-api:0.19.1")          // backend/build.gradle.kts
+compileOnly("dev.mosaicast:plugin-api:0.20.0")          // backend/build.gradle.kts — Maven Central since 0.19.2
 compileOnly("org.pf4j:pf4j:3.16.0")
 annotationProcessor("org.pf4j:pf4j:3.16.0")             // mandatory: generates the @Extension index
-testImplementation("dev.mosaicast:plugin-testkit:0.19.1")
+testImplementation("dev.mosaicast:plugin-testkit:0.20.0")
 ```
 ```json5
-"@mosaicast/plugin-sdk": "0.19.1"                       // frontend/package.json
+"@mosaicast/plugin-sdk": "0.20.0"                       // frontend/package.json
 ```
 
-Both halves of `0.19.1` are published on npm and GitHub Packages (tag `v0.19.1`) — no `mavenLocal()`
-workaround needed. Maven is GitHub Packages
-(`https://maven.pkg.github.com/Mosaicast/mosaicast-plugin-sdk`), which needs a PAT with `read:packages`
-**even for public reads**. Jackson is **3.2.2** (`tools.jackson.*`), not `com.fasterxml`. **Pin the same
-string in all four places** — the CI drift guard and the manifest contract test both compare them.
+**The Java artifacts resolve from Maven Central since 0.19.2 — no GitHub Packages block and no
+`read:packages` PAT needed any more.** `repositories { mavenCentral() }` is enough:
 
-**0.19.0 → 0.19.1 is a patch, nothing to re-declare.** Two things worth knowing anyway: `i18n.bytes` (from
-`createPluginI18n`) now formats in **binary units** (`KiB`/`MiB`/`GiB`/`TiB`, matching core's admin) instead
-of decimal — a component test pinning the old `'268.4 MB'`-style output needs the binary one; and
-`PluginContext.onEpisodePhaseChanged`'s javadoc now documents that calls arrive **concurrently** (see rule
-40 below) — that was true since 0.19.0, just undocumented here until now.
+```kotlin
+repositories {
+    mavenCentral()
+}
+```
+
+GitHub Packages still carries every release too (transitional, for plugins pinned below 0.19.2), but a new
+plugin or a repo bumping its pin should drop the GitHub Packages `maven { … }` block and its credentials
+entirely — see `releasing-a-mosaicast-plugin`'s SKILL.md, which this replaces the PAT prerequisite in.
+Signing is required only for *publishing* to Central, never for consuming from it. Jackson is **3.2.2**
+(`tools.jackson.*`), not `com.fasterxml`. **Pin the same `platformApi` string in all four places** — the CI
+drift guard and the manifest contract test both compare them literally.
+
+**0.20.0 is a real minor, not a patch: realtime actions, channels, timers and `data.backendPrivate`**
+(ARCHITECTURE §7.9). Every addition is **opt-in** — an undeclared `actions`/`channels` block leaves
+`ctx.actions()`/`ctx.channels()` `null`, same shape as every other optional capability — but it's still a
+`major.minor` bump because `PluginContext` gained three **abstract** methods (`actions()`, `channels()`,
+`runAfter(...)`): a hand-rolled `PluginContext` test double needs them to compile, and an older host would
+not know what to do with a manifest declaring either new block. See `references/realtime.md` for the full
+contract.
 
 Coming from an older pin? `references/migrating.md` walks 0.8.0 → 0.9.0 → 0.9.1 → 0.10.0 → 0.11.0 → 0.12.0 →
-0.13.0 → 0.14.0 → 0.15.0 → 0.16.0 → 0.17.0 → 0.18.0 → 0.19.0 in order — read it top to bottom rather than
-jumping straight to 0.19.0, since 0.9.0's compile break and 0.10.0's silent `ctx.translation` gate both still
-apply on the way up. 0.12.0 was the easy step (manifest bump only); 0.13.0 and 0.14.0 each added one more
-optional, `null`-unless-declared capability (`ctx.users`, `ctx.notify`); 0.15.0 fixes two real bugs — a
-configurable schedule that used to ignore its own config, and a component destroyed several times a second
-during playback; 0.16.0 is the audit release — a real compile break (`queryAcrossUsers` → declared
-`ctx.allUsers()`) and a security fix (`ctx.sanitize`) that both shipped plugins needed; 0.17.0 is additive
-only (`DisplaySnapshot.feed`/`.season`/`.episodeNo`, `seasonScope()`); 0.18.0 adds planned-episode awareness
-(`ctx.episode.phase`, `DisplaySnapshot.phase`/`.announceAt`, `onEpisodeReleased`) and a TS test-fixture
-compile break (`ctx.episode` now requires `phase`); 0.19.0 is **also security-shaped, like 0.16.0** —
-`data.keyFloors` and `storage.schemaReadableBy` only mean anything on a host new enough to enforce them, so
-an older host loading a plugin that declares either would silently serve those keys/rows at the plugin's
-(wider) floor. It also drops a trap you may have worked around: `ctx.feeds.displayMany` no longer clamps at
-200, so delete any hand-rolled chunking.
+0.13.0 → 0.14.0 → 0.15.0 → 0.16.0 → 0.17.0 → 0.18.0 → 0.19.0 → 0.20.0 in order — read it top to bottom
+rather than jumping straight to 0.20.0, since 0.9.0's compile break and 0.10.0's silent `ctx.translation`
+gate both still apply on the way up. 0.12.0 was the easy step (manifest bump only); 0.13.0 and 0.14.0 each
+added one more optional, `null`-unless-declared capability (`ctx.users`, `ctx.notify`); 0.15.0 fixes two
+real bugs — a configurable schedule that used to ignore its own config, and a component destroyed several
+times a second during playback; 0.16.0 is the audit release — a real compile break (`queryAcrossUsers` →
+declared `ctx.allUsers()`) and a security fix (`ctx.sanitize`) that both shipped plugins needed; 0.17.0 is
+additive only (`DisplaySnapshot.feed`/`.season`/`.episodeNo`, `seasonScope()`); 0.18.0 adds planned-episode
+awareness (`ctx.episode.phase`, `DisplaySnapshot.phase`/`.announceAt`, `onEpisodeReleased`) and a TS
+test-fixture compile break (`ctx.episode` now requires `phase`); 0.19.0 is **also security-shaped, like
+0.16.0** — `data.keyFloors` and `storage.schemaReadableBy` only mean anything on a host new enough to
+enforce them — and drops the `displayMany` 200-clamp; 0.20.0 adds the realtime surfaces above.
+
+**Patch note folded in along the way, for anyone pinned below 0.19.2:** `i18n.bytes` formats in **binary
+units** since 0.19.1 (`KiB`/`MiB`/`GiB`/`TiB`, matching core's admin) instead of decimal — a component test
+pinning the old `'268.4 MB'`-style output needs the binary one.
 
 To re-check the pin yourself:
 `grep -n 'VERSION = ' mosaicast-plugin-sdk/plugin-api/src/main/java/dev/mosaicast/plugin/api/PlatformApi.java`
@@ -263,6 +276,44 @@ To re-check the pin yourself:
     "Sie"**, no dashes between clauses, no "not X but Y", no filler, no explanations the reader doesn't act
     on. Visitor-facing text never says *plugin*, *slot*, *manifest* or *host*. A plugin written in a
     different voice reads as a foreign object on the page.
+42. **An action is a function the host calls, not a route you author** (0.20.0). The host owns the URL,
+    auth, CSRF, the 16 KiB body cap and the rate limits, and checks the caller, the name's `callableBy` and
+    the scope **before your handler ever runs** — `ActionCall.caller()` is host-resolved, never from the
+    payload. Throw `ActionRejectedException(code)` for a refusal of your own (422, `code` in the problem
+    body for your UI to read); anything else you throw is a 500. `names` in the manifest is a **closed
+    set** — calling an undeclared one is a 404, and registering a handler for one the manifest doesn't
+    declare is an `IllegalArgumentException` at `register()`, not a surprise in production. See
+    `references/realtime.md`.
+43. **Handlers, timers and channel callbacks all run concurrently, with each other — synchronise your own
+    state** (0.20.0). The host promises ordering only via `ActionCall.receivedAt()` (stamped before
+    queueing, not when the handler happens to run). `ActionCall.store()`'s `USER`-scope exception writes to
+    the *caller's own* partition — convenient, but **never authoritative**, since they can overwrite it
+    over HTTP and `backendOwned`/`keyFloors`/`backendPrivate` are all ignored there. State you vouch for
+    goes in a shared scope under `data.backendPrivate`.
+44. **A channel subscribe is refused — terminally — with no `authorize` callback registered at all.** This
+    isn't a manifest default; it's what happens when `register()` never calls
+    `ctx.channels().authorize(...)`. Membership (who's in this game) is something only the plugin knows, so
+    the host's checks (floor, scope, subscription cap) are necessary but never sufficient. `onJoin`/
+    `onLeave` fire **per user**, not per tab. `refused` (floor/authorizer/cap/`kick`) and `closed`
+    (sign-out/erasure/role or access change) are both terminal — the shell does not reconnect either; only
+    a 429 stays `connecting` and retries.
+45. **Channels never store events — subscribe, then fetch state through an action, then apply events.**
+    A late subscriber gets nothing published before it joined; a publish with nobody subscribed is a
+    no-op. `onReset` means exactly "fetch state again" (a long disconnect, a host restart) — never try to
+    reconstruct state from events alone. This is the one pattern worth memorizing before writing any
+    channel-consuming component; see `references/realtime.md`'s worked example.
+46. **`ctx.runAfter`/`PluginContext.runAfter` timers are in-memory only — a restart drops every pending
+    one.** No manifest declaration, no floor (it's one-shot, so it can't become a busy loop the way a
+    periodic `onSchedule` could). Persist the deadline itself and re-arm in `register(ctx)`, the same
+    "memory is a cache, the store is the truth" rule actions follow.
+47. **The Java artifacts resolve from Maven Central since SDK 0.19.2 — drop the GitHub Packages block and
+    the `read:packages` PAT** on any plugin pinning 0.19.2 or later. `repositories { mavenCentral() }` is
+    the whole story for *consuming* the SDK; GitHub Packages still mirrors every release for now, but a new
+    plugin has no reason to use it. Signing only matters if you're *publishing* something, never for
+    resolving `dev.mosaicast:plugin-api`/`plugin-testkit`.
+48. **`homepage` is the "Forward upstream" target for a visitor-feedback report that names your plugin**
+    (core 0.11.0, ARCHITECTURE §20.3) — core-only, nothing to implement, but a reason a real URL there is
+    worth more than a placeholder. No `homepage` falls back to core's own repository.
 
 ## Before you build: ask for a browser and an instance
 
@@ -319,20 +370,22 @@ Five distinct URL namespaces, don't conflate them:
 | Web Component: `ctx` surface, `ctx.schema` queries, `ctx.blobs` uploads, `ctx.links`, `route.navigate`, doc-store HTTP calls, CSP, theme, `--mc-icon-*`, i18n | `references/frontend.md` |
 | Tests (required by the BRIEF's DoD) | `references/testing.md` |
 | Any user-facing text: locale catalogs, config labels/descriptions, consent purposes, notifications | `references/writing-style.md` |
+| Realtime: `actions`, `channels`, `runAfter` timers, `data.backendPrivate` | `references/realtime.md` |
 | Browser + live-instance setup, viewport matrix, data-safety rules, the build→install→restart loop, installing a released plugin by spec | `references/dev-environment.md` |
-| Moving an existing plugin from 0.8.x up to 0.19.0 | `references/migrating.md` |
+| Moving an existing plugin from 0.8.x up to 0.20.0 | `references/migrating.md` |
 
-Live reference implementation: **`mosaicast-plugin-sample` 2.20.1 on SDK 0.19.1** (check it merged and
-tagged before trusting it — it caught up from 2.19.0/0.18.0 since the last pass). It exercises `keyFloors`
-(`plugin.json`: `drafts`/`announced` raised to `podcaster`) and `onEpisodePhaseChanged`, but **not**
-`storage.schemaReadableBy` or `UserDataHandler.exportFiles` — don't expect either in it. What it does
-exercise, still accurately: `feed`/`season`/`episodeNo`, the live `ctx.filter`, `identity`, `notifications`,
-`tags`, `external`, `blobs`, `data.readsAllUsers`, bounded config, a labelled consent category and a
-four-entry `nav[]` (with `visibleTo`, not the SDK type's `role`), Markdown through `ctx.sanitize`, and
-`ctx.blobs`/`ctx.links`/`ctx.route.navigate`. Its `README.md` carries the worked `curl` forgery that
-motivates `backendOwned`, and its `docs/BRIEF.md` pattern is the definition of done for every plugin repo.
-For foreign HTML that must keep the plugin's own `class`/`data-*` markup, the pattern to copy is
-`mosaicast-plugin-wiki` 0.5.0's `markdown.ts`.
+Live reference implementation: **`mosaicast-plugin-sample` 2.21.0 on SDK 0.20.0** (check it merged and
+tagged before trusting it — it caught up from 2.20.1/0.19.1 since the last pass, and now exercises
+`actions` (`favourite`), `channels` (`subscribableBy: "fan"`), `runAfter` (debouncing a site-listing
+refresh) and `data.backendPrivate` (`"announced"`)). Still **not** exercising `storage.schemaReadableBy` or
+`UserDataHandler.exportFiles` — don't expect either in it. What it does exercise, still accurately:
+`keyFloors`, `onEpisodePhaseChanged`, `feed`/`season`/`episodeNo`, the live `ctx.filter`, `identity`,
+`notifications`, `tags`, `external`, `blobs`, `data.readsAllUsers`, bounded config, a labelled consent
+category and a four-entry `nav[]` (with `visibleTo`, not the SDK type's `role`), Markdown through
+`ctx.sanitize`, and `ctx.blobs`/`ctx.links`/`ctx.route.navigate`. Its `README.md` carries the worked `curl`
+forgery that motivates `backendOwned`, and its `docs/BRIEF.md` pattern is the definition of done for every
+plugin repo. For foreign HTML that must keep the plugin's own `class`/`data-*` markup, the pattern to copy
+is `mosaicast-plugin-wiki` 0.5.0's `markdown.ts`.
 
 ## Which docs to trust
 
@@ -351,12 +404,15 @@ For foreign HTML that must keep the plugin's own `class`/`data-*` markup, the pa
   0.7.6), `DisplaySnapshot.feed`/`.season`/`.episodeNo` as identity rather than feed presentation (§4.2,
   §4.4, `platformApi` 0.17.0), planned episodes — quiet-by-default creation, the derived `EpisodePhase`,
   `onEpisodeReleased` and the backend-sees-it/frontend-doesn't visibility split (§4.3, §5.3, §7.4, §7.5,
-  `platformApi` 0.18.0), and **now a new §12.8.1** covering the GDPR file export end to end: the
+  `platformApi` 0.18.0), **§12.8.1** covering the GDPR file export end to end: the
   `exportFiles`-then-`exportUser` order, the ZIP layout, the per-account rate limit, and the
-  `complete|empty|failed|outstanding|not-supported` outcome vocabulary (`platformApi` 0.19.0, core 0.8.0).
-  §7.5's `ctx` block lists `docs`, `feeds`, `tags`, `users`, `notify`, `schema`, `blobs`, `links`,
-  `locale.available/content`, `translation`, `filter`, `episode` (`status`/`phase`/`announceAt`) and
-  `route.navigate`.
+  `complete|empty|failed|outstanding|not-supported` outcome vocabulary (`platformApi` 0.19.0, core 0.8.0),
+  and **now a new §7.9** covering realtime actions/channels/timers in full — the check-order table, the
+  `Caller`/`ActionCall`/`ChannelRef` shapes, the `closed`-vs-`refused` lifecycle, and the SSE-today,
+  transport-not-in-the-contract framing (`platformApi` 0.20.0). §13.5's test-kit paragraph covers
+  `withActions`/`withChannels`/`advanceTimers` too. §7.5's `ctx` block lists `docs`, `feeds`, `tags`,
+  `users`, `notify`, `schema`, `blobs`, `actions`, `channels`, `links`, `locale.available/content`,
+  `translation`, `filter`, `episode` (`status`/`phase`/`announceAt`) and `route.navigate`.
   §6.6 says `og:locale` is the language of *that URL*, not an install-wide constant — read this before
   implementing `ShareMetadataProvider`, since it is the reason `OgMeta.locale` exists (see `backend.md`).
   Still stale on: the `"platformApi": "1.x"` example (that string does not even parse), the example's
