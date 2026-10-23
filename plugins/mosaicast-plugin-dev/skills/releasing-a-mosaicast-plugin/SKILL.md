@@ -1,6 +1,6 @@
 ---
 name: releasing-a-mosaicast-plugin
-description: Use when cutting a release of a Mosaicast plugin, bumping its version or its platformApi/SDK pin, running build.sh and verifying dist/, tagging, or installing a built plugin into MOSAICAST_PLUGINS_DIR and confirming core loaded it. Covers the version anchors that must stay in sync, the GitHub Packages PAT prerequisite, dist/ verification, and the load-failure modes to check in the admin log viewer.
+description: Use when cutting a release of a Mosaicast plugin, bumping its version or its platformApi/SDK pin, running build.sh and verifying dist/, tagging, or installing a built plugin into MOSAICAST_PLUGINS_DIR and confirming core loaded it. Covers the version anchors that must stay in sync, resolving the SDK's Java artifacts from Maven Central (no GitHub Packages PAT needed since SDK 0.19.2), dist/ verification, and the load-failure modes to check in the admin log viewer.
 ---
 
 # Releasing a Mosaicast plugin
@@ -8,12 +8,11 @@ description: Use when cutting a release of a Mosaicast plugin, bumping its versi
 Two versions are in play and they are not the same thing:
 
 - **the plugin's own version** — SemVer, yours to choose, lives in three files
-- **`platformApi`** — the host contract the backend compiled against, currently **0.19.1** (`"0.19.0"` also
-  loads — core matches `major.minor` only) and core **0.8.2** hosts it; core's own minor moved
-  0.7.8 → 0.8.0 → 0.8.1 → 0.8.2 (GDPR export wiring, a feed-deletion event, streamed blob reads)
-  **without** another `platformApi` bump — patch and even a core minor are free to the host, but keep one
-  `platformApi` string across all four anchors, because the contract test and the CI drift guard compare
-  them literally)
+- **`platformApi`** — the host contract the backend compiled against, currently **0.20.0** (core **0.11.1**
+  hosts it; a `0.19.x` manifest is rejected outright — 0.20.0 is a real minor, realtime actions/channels,
+  not a patch) matched by core on exact `major.minor` (patch, and even a core minor with no contract move,
+  stay free to the host — but keep one `platformApi` string across all four anchors below, because the
+  contract test and the CI drift guard compare them literally)
 
 Getting either out of sync produces a plugin that builds cleanly and is rejected at load, quietly, with the
 reason only in the admin log viewer.
@@ -67,24 +66,35 @@ git tag v<version>
 `build.sh` writes **only** `dist/` and never touches core. Run it *after* the version bump — a `dist/` built
 before the bump ships the old manifest and is the most common way a release goes out wrong.
 
-## Prerequisite that trips every first-timer
+## Resolving the SDK's Java artifacts
 
-The SDK artifacts live on GitHub Packages, which **requires authentication even for public reads**. Provide
-`gpr.user`/`gpr.token` gradle properties locally (a PAT with `read:packages`) or `GITHUB_ACTOR`/`GITHUB_TOKEN`
-in CI. Without it the backend build fails to resolve `dev.mosaicast:plugin-api` with a 401 that reads like
-the artifact does not exist.
+**Since SDK 0.19.2, this needs nothing special.** The Java artifacts (`dev.mosaicast:plugin-api`,
+`dev.mosaicast:plugin-testkit`) are signed and published to **Maven Central** with sources and Javadoc —
+`repositories { mavenCentral() }` is the whole story. No `read:packages` PAT, no `GITHUB_ACTOR`/
+`GITHUB_TOKEN` in CI, no `gpr.user`/`gpr.token` gradle properties. If your repo still carries a GitHub
+Packages `maven { url = uri(".../mosaicast-plugin-sdk") }` block and its credentials, drop both — see
+`writing-a-mosaicast-plugin/references/migrating.md`'s "drop the GitHub Packages block" note. **This is what
+used to trip every first-timer here** (GitHub Packages required authentication even for public reads, and
+without it the build failed to resolve `plugin-api` with a 401 that read like the artifact didn't exist) —
+that trap is gone for any plugin pinning 0.19.2 or later.
 
-**0.19.1 is published** on both npm and GitHub Packages (tagged `v0.19.1`), so no workaround is needed today. If a
-future SDK version you need is on master but **untagged**, resolve it from a local checkout instead — `mavenLocal()` after `./gradlew publishToMavenLocal` in the SDK repo, or
+GitHub Packages still mirrors every release for now, so a repo pinned **below** 0.19.2 keeps the old block
+working; there is no forcing function to upgrade, only a reason to prefer it going forward. A new Central
+release can take **10–30 minutes** to become resolvable after it's published (it's a manual Portal release,
+not automatic) — if a build suddenly can't find a version you know was tagged, that's the likely reason,
+not a typo in the coordinate.
+
+If the SDK version you need is on `master` but not yet released at all (to either registry), resolve it
+from a local checkout instead — `mavenLocal()` after `./gradlew publishToMavenLocal` in the SDK repo, or
 `includeBuild("../mosaicast-plugin-sdk")`. Do not ship a release built that way without confirming the
 artifact is public first, or nobody else can rebuild it.
 
 **The SDK's 0.15.0 release originally shipped tagged only `0.15.0`, breaking its own `v<version>`
-convention** (every other release, `v0.19.1` and `v0.19.0` down to `v0.1.0`, has the prefix). Never affected npm/GitHub
-Packages, which publish off `package.json`/`build.gradle.kts` rather than the tag. `v0.15.0` was since added
-as a second tag on the same commit, so both `git checkout v0.15.0` and `git checkout 0.15.0` resolve —
-but don't assume every future release gets this treatment; check the tag actually exists before a script
-assumes the `v` prefix.
+convention** (every other release, `v0.20.0` and `v0.19.1` down to `v0.1.0`, has the prefix). Never affected
+npm/GitHub Packages/Maven Central, which all publish off `package.json`/`build.gradle.kts` rather than the
+tag. `v0.15.0` was since added as a second tag on the same commit, so both `git checkout v0.15.0` and
+`git checkout 0.15.0` resolve — but don't assume every future release gets this treatment; check the tag
+actually exists before a script assumes the `v` prefix.
 
 ## Install and verify
 
@@ -124,6 +134,10 @@ The folder name **must equal the manifest `id`**. Then verify in this order — 
 | same | a `blobs` block with a non-positive limit, an empty `mimeTypes` list, `image/svg+xml` in it, an unknown `readableBy`/`writableBy` floor, or `blobs.writableBy: "anonymous"` |
 | same | a `data.keyFloors` entry naming no keys, raising neither floor, below the plugin's own floor, with a bad selector, or `writableBy: "anonymous"` |
 | same | `storage.schemaReadableBy` outside the four known roles |
+| same | `actions` declaring no `names`, an action name failing its grammar, a name's `callableBy` below the block's, `actions.callableBy`/`channels.subscribableBy` set to `anonymous` or outside the known roles, or a non-positive `perUserPerMinute`/`perPluginPerMinute`/`perUserSubscriptions` |
+| same | a `data.backendPrivate` entry that is not an exact key, a single-trailing-`*` prefix, or the bare `*` |
+| loads, but every channel subscribe is refused | no `ctx.channels().authorize(...)` registered in `register()` — the manifest validates the block, not the backend wiring |
+| loads, but calling an action 404s `unknown-action` | the name is declared in the manifest but `ctx.actions().handle(name, …)` was never called in `register()` — or the reverse: `handle()` called for a name the manifest doesn't declare, which is an `IllegalArgumentException` **at `register()`**, so this one fails loudly before you ship |
 | same | a `tags` block with both `readsVocabulary` and `writesEpisodes` false, or an `external` block with empty `kinds` — both "asks for nothing" refusals |
 | same | an `external.kinds` entry that is not `"translation"` (the only kind today), or `nav[]` entries with no `page` slot, no `label`, a `../`-climbing `path`, or two entries normalising to the same `path` |
 | `nav[]` loads but core ignores your entry's role floor | you wrote `"role"` — core's field is `"visibleTo"`, same as a slot; the SDK's TS type disagrees with core here |

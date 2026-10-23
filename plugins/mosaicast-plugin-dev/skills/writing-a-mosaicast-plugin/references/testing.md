@@ -2,14 +2,18 @@
 
 Required by every repo's `docs/BRIEF.md` DoD (ARCHITECTURE §13.5). No core, no database, no browser.
 
+**Testing actions, channels or timers?** That's all in `references/realtime.md`'s own Testing section —
+`FakePluginContext.withActions`/`.withChannels`/`.advanceTimers`, `Callers`, `SubscriptionRefusedException`,
+and TS's `makeMockActions`/`makeMockChannels` — rather than duplicated in the tables below.
+
 ## Backend — `dev.mosaicast.plugin.testkit.*`
 
-`testImplementation("dev.mosaicast:plugin-testkit:0.19.1")`
+`testImplementation("dev.mosaicast:plugin-testkit:0.20.0")`
 
 | Fake | Notes |
 |---|---|
 | `FakePluginContext` | `store()` narrows to `InMemoryDocStore` and `logger()` to `RecordingLogger`, so no casts. `onSchedule` runs the task **synchronously and immediately** (both overloads — the `Supplier` form's value is read once, validated positive, then the task runs); `scheduledCount()` counts registrations, `scheduledPeriods()` (0.15.0) **re-reads every supplier now** — the assertion that catches a period captured once instead of read live — and `runScheduled()` (0.15.0) ticks every registered task again, for the second-pass case. `onEpisodeReleased(...)` just keeps the listener; `fireEpisodeReleased(slug)` (0.18.0) calls every registered listener in order, catching and logging a throw exactly as the host does — pair it with `FakeFeedAccess.withPhase(slug, RELEASED)` so a lookup inside the listener sees the released state. `episodeReleasedListenerCount()` (0.18.0) asserts a plugin subscribed at all. `onEpisodePhaseChanged(...)` / `fireEpisodePhaseChanged(slug, phase)` (0.19.0, `phase == null` for cancellation) and `episodePhaseListenerCount()` (0.19.0) are the same trio for the write-driven phase hook. `withTags(Tags)` / `withLocales(Locales)` / `withTranslation(Translation)` / `withUsers(Users)` (0.13.0) / `withNotifier(Notifier)` (0.14.0) / `withReadsAllUsers()` (0.16.0) are **chaining mutators**, not constructor parameters — the constructor list stopped growing at five arguments (`store, config, feeds, schema[, blobs]`) on purpose (0.9.0). |
-| `InMemoryDocStore` | `asUser(uuid)`, `docsOf(uuid)`, `withBackendOwned(...)`, `acrossUsers()` (0.16.0 — every user partition, for assertions; always available on the store, whatever the plugin declares). `withKeyFloor(pattern, readableBy, writableBy)` (0.19.0) declares a key floor the same way the manifest does; `asUser(UUID, Role)` and `asAnonymous()` (0.19.0) give you a client view at a specific role to assert a floor actually bites (`asUser(uuid)` alone stays a plain `FAN` view). Optional `ObjectMapper` ctor — Jackson 3, so `JsonMapper.builder().build()`. |
+| `InMemoryDocStore` | `asUser(uuid)`, `docsOf(uuid)`, `withBackendOwned(...)`, `acrossUsers()` (0.16.0 — every user partition, for assertions; always available on the store, whatever the plugin declares). `withKeyFloor(pattern, readableBy, writableBy)` (0.19.0) declares a key floor the same way the manifest does; `asUser(UUID, Role)` and `asAnonymous()` (0.19.0) give you a client view at a specific role to assert a floor actually bites (`asUser(uuid)` alone stays a plain `FAN` view). `withBackendPrivate(pattern...)` (0.20.0) declares a `data.backendPrivate` key the same way. Optional `ObjectMapper` ctor — Jackson 3, so `JsonMapper.builder().build()`. |
 | `FakeSchemaStore` | `new FakeSchemaStore(ns).withEntity("page", "slug", "title").withFulltext("page", "markdown")` — enforces the same declaration the host does. |
 | `InMemoryPluginBlobs` | `withLimits(maxFile, quota)`, `withMimeTypes(Set.of(…))`, `rejectContent("bad.png")`, plus `usedBytes()` / `size()` / `bytesOf(ref)`. Refuses what the host refuses. |
 | `FakeFeedAccess` | `withDisplay(refId, snapshot)`; `display(unknownId)` throws; `episodesIn(Scope.user())` is empty. Nothing here is filtered by phase — a `PLANNED` episode in the map hands over like any other, matching how the host's real `FeedAccess` behaves for a backend. `withPhase(refId, EpisodePhase)` (0.18.0) moves an already-registered snapshot to another phase, keeping the rest; leaving `PLANNED`/`UPCOMING` clears `announceAt`, as the host does. |

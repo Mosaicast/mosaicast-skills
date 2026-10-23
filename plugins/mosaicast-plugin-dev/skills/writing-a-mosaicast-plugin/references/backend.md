@@ -3,7 +3,7 @@
 Implement `PluginBackend.register(PluginContext ctx)` on an `@Extension` class in package
 `dev.mosaicast.plugin.<name>.*`. Compile against the SDK only — never core — and stay Spring-free.
 
-## `PluginContext` — twelve accessors, exactly
+## `PluginContext` — fourteen accessors, exactly
 
 ```java
 DocStore store();                                // the generic doc store
@@ -19,11 +19,20 @@ Locales locales();                                // never null — the site's l
 Translation translation();                        // null unless external.kinds declares "translation" AND
                                                    // an admin configured a provider (0.10.0; gated 0.11.0)
 org.slf4j.Logger logger();                       // already named "plugin.<pluginId>"
+Actions actions();                                // null unless the manifest declares an actions block (0.20.0)
+Channels channels();                              // null unless the manifest declares a channels block (0.20.0)
 void onSchedule(Duration every, Runnable task);          // fixed period, captured once at register()
 void onSchedule(Supplier<Duration> every, Runnable task); // period RE-READ before every tick (0.15.0)
 default void onEpisodeReleased(Consumer<String> listener); // a planned episode just became RELEASED (0.18.0)
 default void onEpisodePhaseChanged(BiConsumer<String, EpisodePhase> listener); // any write-driven phase change, incl. becoming null on cancel (0.19.0)
+Scheduled runAfter(Duration delay, Runnable task); // one-shot, in memory, no floor, no manifest declaration (0.20.0)
 ```
+
+**`actions()`, `channels()` and `runAfter(...)` are abstract, not `default`** (unlike `onEpisodeReleased`/
+`onEpisodePhaseChanged`) — a hand-rolled `PluginContext` test double of your own must implement all three to
+keep compiling on 0.20.0. `FakePluginContext` already does. See `references/realtime.md` for the full
+actions/channels/timer contract — request-time calls into your backend, live push events to subscribed
+browsers, and a one-shot clock.
 
 **It's `notifier()`, not `notify()`.** ARCHITECTURE §7.4 specifies the latter, and it cannot compile:
 `Object.notify()` is `final`, so no interface may declare that name. The TypeScript half is `ctx.notify`,
@@ -196,6 +205,9 @@ List<DocEntry>      query(Scope scope, String keyPrefix);
   rule — `ctx.store()` reads and writes every key regardless of any floor declared on it. See `manifest.md`
   for the selector grammar, the raise-only rule, and the three places a hidden key behaves differently
   (listing, batch read, single read/write).
+- **`data.backendPrivate` (0.20.0) goes one step further than `keyFloors`: no HTTP caller at all, not even
+  admin.** Same unaffected-`ctx.store()` story. The intended home for state an action decides what to reveal
+  of — see `references/realtime.md`.
 
 ### Aggregates across users — `ctx.allUsers()`, declared (0.16.0)
 

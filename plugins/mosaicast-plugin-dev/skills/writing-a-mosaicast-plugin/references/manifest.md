@@ -13,7 +13,7 @@ rejected.
 {
   "id": "sample",
   "version": "2.17.0",
-  "platformApi": "0.19.1",
+  "platformApi": "0.20.0",
   "name": "Sample",
   "license": "Apache-2.0",
   "author": "The Mosaicast Authors",
@@ -117,6 +117,10 @@ counterpart.
 **Per-key floors since 0.19.0: `data.keyFloors`.** The two floors above cover every key uniformly;
 `keyFloors` raises *specific* keys above them — see below.
 
+**Keys no client reaches at all, since 0.20.0: `data.backendPrivate`.** `keyFloors`' highest floor is still
+`admin` — an admin can still read it over HTTP. `backendPrivate` is the rule for "nobody over HTTP, ever,
+not even an admin" — see below, after `keyFloors`.
+
 **`identity` and `notifications` sit outside this floor pair entirely** — neither `readableBy` nor
 `writableBy` governs `ctx.users` or `ctx.notify`. Resolving users has no role floor at all (see `identity`
 below); sending a notification is bounded by eligibility and the host's rate limits, not by `data`.
@@ -214,6 +218,81 @@ exact key, a `prefix*`, or the bare `*`.
 A plugin that under-declares a floor here is not quietly fine on an older host: a host older than 0.19.0
 doesn't know the field at all, ignores it, and serves those keys at the plugin's *wider* floor — which is
 exactly why this shipped in a `platformApi` minor rather than as a patch.
+
+### `backendPrivate` (0.20.0)
+
+```json
+"data": { "readableBy": "fan", "writableBy": "podcaster", "backendPrivate": ["game:*", "invites:*"] }
+```
+
+State your backend keeps between calls but shows **nobody** as stored — a game in progress, who was
+invited, anything an [action](#actions--realtime-request-time-calls-0200) decides what to reveal of. Same
+selector grammar as `backendOwned`/`keyFloors` (exact key, `prefix*`, or the bare `*`), rejected at load the
+same way on a bad entry — *"data.backendPrivate entry '%s' is not usable: it must be an exact key, a prefix
+ending in a single '*', or the bare '*'"*.
+
+**The one rule stricter than `keyFloors`.** `keyFloors`' ceiling is still `admin` — an admin can read it
+over HTTP. `backendPrivate` has no ceiling at all: a single `get`/`put`/`remove` is a 403
+`backend-private-key` for *every* caller, a listing drops the key before paging, a batch leaves it absent.
+Only `ctx.store()` — your backend — ever reads or writes it; the frontend learns what it holds only through
+whatever an action chooses to answer.
+
+**Check order on a write: plugin floor → `backendPrivate` → `backendOwned` → key floor.** On a read: plugin
+floor → `backendPrivate` → key floor. Ignored for the `USER` scope, like every other per-key rule — a user's
+own partition is never anyone's to hide from them, including the plugin that holds it.
+
+**A host older than 0.20.0 ignores the field and serves these keys at the plugin's floor** — the same
+security reason `keyFloors` shipped in a `platformApi` minor, not a patch.
+
+## `actions` — realtime request-time calls (0.20.0)
+
+```json
+"actions": { "callableBy": "fan",
+             "names": { "join": {}, "move": {}, "start": { "callableBy": "podcaster" } },
+             "perUserPerMinute": 120, "perPluginPerMinute": 2000 }
+```
+
+A **function** the host calls at request time, not a route the plugin authors — the host owns the URL,
+auth, CSRF, the body cap, the rate limits and the error shape, and checks every one of them before any
+plugin code runs. `names` is the **closed set** a client may call; calling an undeclared name is a 404
+`unknown-action`, same as an unrecognised plugin id — a typo here is caught at `register()`
+(`IllegalArgumentException` wiring a handler the manifest never named), not at the first production call.
+
+- **`callableBy`** — the block's floor, defaulting to `fan`. **`anonymous` is refused at load** — *"actions.callableBy
+  may not be 'anonymous' — realtime surfaces need a signed-in caller"* — an action runs plugin code *on the
+  caller's behalf*, and a caller with no account is one nothing can rate-limit per-user or hold to account.
+- **A name's own `callableBy` can only raise the block's**, exactly like `keyFloors` raising `data`'s: *"action
+  '%s' callableBy '%s' is below the block's '%s'; a name can only raise it"*.
+- **`names` must name at least one action** — *"actions declares no names; list every action the plugin
+  handles"* — the same "asks for nothing" refusal `tags`/`external` get.
+- **`perUserPerMinute`/`perPluginPerMinute`** are what you *ask* for; the operator's budget is what you
+  actually get, and a non-positive number is rejected at load (*"actions.perUserPerMinute must be a positive
+  number, not %d"*, same for the plugin-wide one).
+
+Absent ⇒ `ctx.actions` / `PluginContext.actions()` are `null`, exactly like `blobs`/`tags`/`identity` before
+it. See `references/realtime.md` for the full request lifecycle, the backend/frontend APIs and the test kit.
+
+## `channels` — realtime live events (0.20.0)
+
+```json
+"channels": { "subscribableBy": "fan", "perUserSubscriptions": 4 }
+```
+
+Live events pushed from the plugin's backend to subscribed browsers — nothing here names a transport; how
+events travel (SSE today) is the host's business, not the contract's.
+
+- **`subscribableBy`** — defaults to `fan`. **`anonymous` is refused at load**, the same signed-in-caller
+  rule and the same message as `actions.callableBy`.
+- **`perUserSubscriptions`** — concurrent subscriptions per user to this plugin, asked for; the operator
+  caps it. Non-positive is rejected at load, same as the actions block's two numbers.
+- **Without an `authorize` callback registered in `register()`, every subscribe is refused** — this is a
+  backend-wiring fact, not something the manifest states or validates.
+
+Absent ⇒ `ctx.channels` / `PluginContext.channels()` are `null`. See `references/realtime.md`.
+
+**Both blocks share the realtime vocabulary, deliberately.** Action names, action rejection codes and
+channel event names all match the same grammar, `^[a-z0-9][a-z0-9-]{0,63}$`; channel *names* (not events)
+are looser, `^[A-Za-z0-9:_-]{1,128}$`, since a plugin builds structured ids like `game:42` out of them.
 
 ## `storage` — doc (default) or schema
 
@@ -497,6 +576,11 @@ public **`/about`** page — what an install runs, and under what terms, is not 
 different links: a plugin that borrows data, artwork or an upstream library can credit the source without
 giving up its own page.
 
+**`homepage` has a second job since core 0.11.0: it's where a visitor-feedback report "Forward upstream"
+button opens** when a report names this plugin (ARCHITECTURE §20.3) — a core-only feature with no plugin
+code or manifest validation involved. Falls back to core's own repository if you don't declare one. One
+more reason a real `homepage` is worth the one line it costs.
+
 **Never validated, and never a rejection reason.** `license` is not checked against the SPDX list, none of
 the four is checked for shape, and a plugin written before they existed keeps loading exactly as before —
 credit is not a correctness concern. Add them freely; there is nothing here to get wrong.
@@ -602,6 +686,13 @@ a prefix ending in *, or the bare *` · `data.keyFloors entry for %s raises neit
 write needs a signed-in user` · `data.keyFloors readableBy '%s' for %s is below the plugin's read floor '%s'`
 · `data.keyFloors writableBy '%s' for %s is below the plugin's write floor '%s'` (0.19.0) ·
 `storage.schemaReadableBy '%s' is not one of […]` (0.19.0) ·
+`data.backendPrivate entry '%s' is not usable` (0.20.0) ·
+`actions declares no names; list every action the plugin handles` · `action name '%s' does not match …` ·
+`action '%s' callableBy '%s' is below the block's '%s'; a name can only raise it` ·
+`actions.callableBy`/`channels.subscribableBy` `may not be 'anonymous' — realtime surfaces need a signed-in
+caller` · `actions.callableBy`/`channels.subscribableBy '%s' is not one of […]` ·
+`actions.perUserPerMinute`/`perPluginPerMinute`/`channels.perUserSubscriptions must be a positive number,
+not %d` (0.20.0) ·
 `tags block asks for nothing (readsVocabulary and writesEpisodes are both false)` ·
 `external block declares no kinds` · `external kind '%s' is not one of […]` ·
 `external.usedBy '%s' is not one of […]` (`external.usedBy: anonymous` loads fine but logs a warning) ·
